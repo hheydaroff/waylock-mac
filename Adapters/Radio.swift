@@ -1,6 +1,13 @@
 import CoreBluetooth
 import Foundation
 
+// Under SwiftPM, Core is a separate module; build.sh compiles everything as one,
+// where there is nothing to import. Core is internal by design (see AGENTS.md),
+// hence @testable.
+#if canImport(WaylockCore)
+@testable import WaylockCore
+#endif
+
 /// The CoreBluetooth adapter: the only module that knows the radio exists.
 ///
 /// It reports sightings and state changes and nothing else. The stall watchdog
@@ -16,7 +23,13 @@ import Foundation
 /// watchdog that would have explained it. Delegate work therefore stays on
 /// `queue`, and everything the app can see (`state`, the callbacks) is delivered
 /// on the main thread, so the rest of the app stays single-threaded.
-final class Radio: NSObject, CBCentralManagerDelegate {
+///
+/// `@unchecked Sendable` because that split is per-variable ownership rather than
+/// shared mutable state the compiler can see: `central` and `scanning` are touched
+/// only on `queue`; `started`, `state` and the callbacks only on the main thread.
+/// One owner each, so no lock is needed, and the annotation states the argument
+/// instead of hiding it.
+final class Radio: NSObject, CBCentralManagerDelegate, @unchecked Sendable {
     /// Called for every advertisement worth reporting, on the main thread.
     var onSighting: ((Sighting) -> Void)?
     var onState: ((RadioState) -> Void)?
@@ -89,8 +102,12 @@ final class Radio: NSObject, CBCentralManagerDelegate {
         } else {
             scanning = false
         }
+        // Read everything the hop needs while still on the radio queue. `central`
+        // belongs to that queue, and touching it from a main-thread closure is the
+        // data race Swift 6 is pointing at.
+        let raw = central.state.rawValue
         DispatchQueue.main.async { [self] in
-            if next != state { log("bluetooth state -> \(central.state.rawValue)") }
+            if next != state { log("bluetooth state -> \(raw)") }
             state = next
             onState?(next)
         }

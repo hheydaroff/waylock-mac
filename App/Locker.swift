@@ -16,8 +16,6 @@ import IOKit
 func CGSessionCopyCurrentDictionary() -> CFDictionary?
 
 enum Locker {
-    private static var handle: UnsafeMutableRawPointer?
-
     static func screenIsLocked() -> Bool {
         guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
         return session["CGSSessionScreenIsLocked"] as? Bool ?? false
@@ -26,11 +24,13 @@ enum Locker {
     /// Returns only what was verified, not what the private call reported.
     @discardableResult
     static func lock() -> Bool {
-        if handle == nil {
-            handle = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login",
-                            RTLD_LAZY)
-        }
-        guard let framework = handle, let symbol = dlsym(framework, "SACLockScreenImmediate") else {
+        // Resolved on every attempt rather than cached in a static: dlopen on a
+        // framework that is already loaded and dlsym are both cheap, a lock is a
+        // once-a-day event, and a cached handle is process-wide mutable state that
+        // Swift 6 could only accept by being told to look away.
+        let framework = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login",
+                               RTLD_LAZY)
+        guard let framework, let symbol = dlsym(framework, "SACLockScreenImmediate") else {
             log("lock: could not resolve SACLockScreenImmediate")
             return false
         }

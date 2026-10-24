@@ -1,6 +1,14 @@
 import CoreBluetooth
 import Foundation
 
+// Under SwiftPM these are separate modules; build.sh compiles everything as one,
+// where there is nothing to import. Core and Adapters are internal by design (see
+// AGENTS.md), which is why this is @testable and why every build is a debug build.
+#if canImport(WaylockCore)
+@testable import WaylockCore
+@testable import WaylockAdapters
+#endif
+
 // Waylock's two radio-dependent commands. Everything they decide is in Core;
 // what is left here is printing, because these are the runs that produce evidence
 // and their output is read by a human.
@@ -10,8 +18,14 @@ import Foundation
 
 /// A live session: radio in, tracker out. Shared by both commands so the wire-up
 /// exists once.
+///
+/// Main-actor bound: the radio delivers its callbacks on the main thread, and a
+/// command-line tool prints and exits, so there is nothing here that wants a queue.
+@MainActor
 final class Live {
     let radio = Radio()
+    /// When the all-absent test first fired, so the summary can say when.
+    var firedAt: Double?
     private(set) var settings: Settings
     private(set) var tracker: Tracker
     private let store: SettingsStore
@@ -44,26 +58,28 @@ final class Live {
 
 /// Drives the real scan → match → all-absent path with no menu bar and no locking.
 /// This is the part that can false-positive, so it is the part worth watching.
-func runSelfTest(seconds: Double) {
+@MainActor func runSelfTest(seconds: Double) {
     let live = Live()
     let start = Date()
-    var firedAt: Double?
 
     print("selftest \(Int(seconds))s on '\(live.settings.keyName)'"
           + " (window \(Int(live.settings.awayWindow.seconds))s \(live.settings.awayWindow.label))")
     live.start()
 
-    let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
-        let elapsed = Date().timeIntervalSince(start)
+    // A Timer block is @Sendable and Timer is not Sendable, so the block keeps the
+    // timer and the body is handed only the elapsed seconds. The assumption is sound
+    // because the timer is scheduled on RunLoop.main — same thread, no hop — and the
+    // body answers with an exit code instead of reaching back into the timer.
+    let step: @MainActor (Double) -> Int32? = { elapsed in
         let window = live.settings.awayWindow.seconds
         let now = Date()
 
-        if checkRadio(live, elapsed: elapsed, timer: timer) { return }
+        checkRadio(live, elapsed: elapsed)
 
         if let absent = live.tracker.absent(now: now) {
             let away = absent >= window
             let best = live.tracker.bestChannel()
-            if away, firedAt == nil { firedAt = elapsed }
+            if away, live.firedAt == nil { live.firedAt = elapsed }
             print(String(format: "%5.0fs  %-7@  allAbsent=%.1fs window=%.0fs  best=%@ %ddBm %@",
                          elapsed,
                          (away ? "AWAY" : "present") as NSString,
@@ -76,16 +92,22 @@ func runSelfTest(seconds: Double) {
                          live.settings.keyName as NSString))
         }
 
-        guard elapsed >= seconds else { return }
-        timer.invalidate()
+        guard elapsed >= seconds else { return nil }
         print("\nchannels tracked: \(live.tracker.channels.count)")
         for (id, channel) in live.tracker.channels.sorted(by: { $0.value.packets > $1.value.packets }) {
             print("  '\(channel.name)' \(id.uuidString.prefix(8))"
                   + " packets=\(channel.packets) last=\(channel.lastRSSI)dBm")
         }
-        print(firedAt.map { String(format: "TRIGGERED at t=%.0fs", $0) }
+        print(live.firedAt.map { String(format: "TRIGGERED at t=%.0fs", $0) }
               ?? "no trigger (stayed present)")
-        exit(0)
+        return 0
+    }
+    let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+        let elapsed = Date().timeIntervalSince(start)
+        let code = MainActor.assumeIsolated { step(elapsed) }
+        guard let code else { return }
+        timer.invalidate()
+        exit(code)
     }
     RunLoop.main.add(timer, forMode: .common)
     RunLoop.main.run()
@@ -94,7 +116,7 @@ func runSelfTest(seconds: Double) {
 /// Measures this device's union-gap distribution and says what window it can
 /// support. Sit at the desk with the device while it runs; walking away does not
 /// corrupt the result (absences are discarded as outliers) but clean data is better.
-func runCalibration(minutes: Double, apply: Bool) {
+@MainActor func runCalibration(minutes: Double, apply: Bool) {
     let live = Live()
     let start = Date()
     let total = max(30, minutes * 60)
@@ -107,16 +129,14 @@ func runCalibration(minutes: Double, apply: Bool) {
     }
     live.start()
 
-    let timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { timer in
-        let elapsed = Date().timeIntervalSince(start)
-        if checkRadio(live, elapsed: elapsed, timer: timer) { return }
+    let step: @MainActor (Double) -> Int32? = { elapsed in
+        checkRadio(live, elapsed: elapsed)
         let absent = live.tracker.absent(now: Date())
         print(String(format: "%5.0fs  ch=%d  gaps=%3d  absent=%@",
                      elapsed, live.tracker.channels.count, live.tracker.arrivals.count,
                      (absent.map { String(format: "%.1fs", $0) } ?? "never seen") as NSString))
 
-        guard elapsed >= total else { return }
-        timer.invalidate()
+        guard elapsed >= total else { return nil }
 
         let gaps = live.tracker.arrivals
         print("\nsamples \(gaps.count) over \(Int(elapsed))s")
@@ -127,7 +147,7 @@ func runCalibration(minutes: Double, apply: Bool) {
 
         guard let recommendation = gaps.recommendation() else {
             print("\nNOT ENOUGH DATA (need \(Arrivals.minSamples) gaps) — is the device advertising?")
-            exit(2)
+            return 2
         }
         print(String(format: "\nrecommended window: %.1fs  (worst kept gap %.1fs x1.5, %d of %d samples)",
                      recommendation.window, recommendation.worst, recommendation.kept, gaps.count))
@@ -139,7 +159,14 @@ func runCalibration(minutes: Double, apply: Bool) {
         } else {
             print("not applied — rerun with --apply to save it")
         }
-        exit(0)
+        return 0
+    }
+    let timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { timer in
+        let elapsed = Date().timeIntervalSince(start)
+        let code = MainActor.assumeIsolated { step(elapsed) }
+        guard let code else { return }
+        timer.invalidate()
+        exit(code)
     }
     RunLoop.main.add(timer, forMode: .common)
     RunLoop.main.run()
@@ -150,9 +177,10 @@ setvbuf(stdout, nil, _IONBF, 0)   // unbuffered: a hang must still leave a trace
 /// The radio never reaching a known state is the failure that has no error
 /// message: CoreBluetooth is waiting for a permission decision and will wait
 /// forever. Fail loud instead of hanging — this is a tool, not the menu bar app.
-func checkRadio(_ live: Live, elapsed: Double, timer: Timer) -> Bool {
-    guard live.radio.state == .unknown, elapsed > 20 else { return false }
-    timer.invalidate()
+/// Exits rather than returning, because a tool that waits forever for a permission
+/// prompt looks exactly like a tool that is working.
+@MainActor func checkRadio(_ live: Live, elapsed: Double) {
+    guard live.radio.state == .unknown, elapsed > 20 else { return }
     print("""
 
     Bluetooth never reported a state after \(Int(elapsed))s.
@@ -177,7 +205,7 @@ if let index = arguments.firstIndex(of: "--calibrate") {
     usage: waylock-tools --selftest [seconds]
            waylock-tools --calibrate [minutes] [--apply]
 
-    The menu bar app is build/Waylock.app. Logic tests are build/waylock-tests.
+    The menu bar app is build/Waylock.app. Logic tests are `swift test`.
     """)
     exit(2)
 }

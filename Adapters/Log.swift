@@ -1,5 +1,12 @@
 import Foundation
 
+// Under SwiftPM, Core is a separate module; build.sh compiles everything as one,
+// where there is nothing to import. Core is internal by design (see AGENTS.md),
+// hence @testable.
+#if canImport(WaylockCore)
+@testable import WaylockCore
+#endif
+
 private let clock: DateFormatter = {
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"

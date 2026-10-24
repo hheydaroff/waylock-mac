@@ -1,38 +1,43 @@
 #!/bin/bash
-# Build three things from one core — no Xcode project, just swiftc.
+# Build the menu bar app bundle. Everything else is plain SwiftPM:
 #
-#   Core/   pure logic, no AppKit, no CoreBluetooth
-#   App/    the menu bar app + everything that touches macOS
-#   Tools/  the radio-dependent commands
-#   Tests/  assertions against Core only, so they need no radio and no permission
+#   swift build                      libraries, tools, probes
+#   swift test                       every decision, no radio, no locking
+#   swift run waylock-tools ...      the radio-dependent commands
+#
+# SwiftPM cannot make a signed .app, so this script does only that. It runs
+# `swift build` first so a broken tool or test target fails here, before an app is
+# signed, rather than at the next `swift run`.
+#
+#   Core/      pure logic: Foundation only
+#   Adapters/  CoreBluetooth and UserDefaults, shared with the tools
+#   App/       the menu bar app: AppKit, IOKit, ServiceManagement
+#
+# The app is compiled as one module from the sources, not linked against the
+# SwiftPM libraries, so Core and Adapters need no `public` declarations.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 APP="build/Waylock.app"
 BIN="$APP/Contents/MacOS/Waylock"
-FLAGS=(-O -target arm64-apple-macos13.0)
+# Swift 6 language mode: the whole tree compiles clean, so a new warning or a data
+# race is a build failure rather than a note in a log nobody reads.
+FLAGS=(-O -target arm64-apple-macos13.0 -swift-version 6)
 
-echo "==> core tests"
-swiftc "${FLAGS[@]}" Core/*.swift Tests/main.swift -o build/waylock-tests.tmp
-mv build/waylock-tests.tmp build/waylock-tests
-
-echo "==> tools"
-swiftc "${FLAGS[@]}" -framework CoreBluetooth \
-    Core/*.swift \
-    App/Log.swift App/Radio.swift App/SettingsStore.swift \
-    Tools/main.swift \
-    -o build/waylock-tools.tmp
-mv build/waylock-tools.tmp build/waylock-tools
+echo "==> swift build"
+swift build
 
 echo "==> app"
-rm -rf "$APP"
+# Targeted deletes, not `rm -rf`: a bundle is three known paths, and a recursive
+# delete in a build script is one bad variable away from removing something real.
+rm -f "$BIN" "$APP/Contents/Info.plist"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc "${FLAGS[@]}" \
     -framework AppKit \
     -framework CoreBluetooth \
     -framework IOKit \
     -framework ServiceManagement \
-    Core/*.swift App/*.swift \
+    Core/*.swift Adapters/*.swift App/main.swift App/Locker.swift \
     -o "$BIN"
 
 echo "==> bundling"
@@ -47,17 +52,17 @@ codesign --force --sign - --identifier io.github.hheydaroff.waylock "$APP"
 echo "==> verifying"
 codesign --verify --verbose=2 "$APP" 2>&1 | sed 's/^/    /'
 /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Contents/Info.plist" | sed 's/^/    bundle id: /'
-ls -lh "$BIN" build/waylock-tests build/waylock-tools | awk '{print "    "$9": "$5}'
+ls -lh "$BIN" | awk '{print "    "$9": "$5}'
 
-cat <<EOF
+cat <<EOT
 
 Built: $(pwd)/$APP
 
-  ./build/waylock-tests           # logic: windows, identity, decision, menu copy
-  ./build/waylock-tools --calibrate 10
-  open "$(pwd)/$APP"              # launch
+  swift test                          # logic: windows, identity, decision, menu copy
+  swift run waylock-tools --selftest 60
+  open "$(pwd)/$APP"                  # launch
   tail -f ~/Library/Logs/Waylock.log
 
 The app needs Bluetooth permission, granted per code signature: a rebuild asks
 again. CLI runs (tests, tools) inherit the Terminal's grant and never ask.
-EOF
+EOT

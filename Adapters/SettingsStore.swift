@@ -1,5 +1,12 @@
 import Foundation
 
+// Under SwiftPM, Core is a separate module; build.sh compiles everything as one,
+// where there is nothing to import. Core is internal by design (see AGENTS.md),
+// hence @testable.
+#if canImport(WaylockCore)
+@testable import WaylockCore
+#endif
+
 /// Translates one `Settings` value to and from `UserDefaults`.
 ///
 /// The only module that touches them, so preferences are written in one place and
