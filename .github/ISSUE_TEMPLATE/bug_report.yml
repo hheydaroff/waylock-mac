@@ -1,0 +1,69 @@
+name: Bug report
+description: Waylock locked when it should not have, or did not lock when it should have.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read the heartbeat first. In `~/Library/Logs/Waylock.log`, `absent`
+        climbing past `window` with `locked=0` points at the lock call.
+        `absent` staying near zero means the key device is still in range.
+        Do not report a vulnerability here. See SECURITY.md.
+  - type: textarea
+    id: heartbeat
+    attributes:
+      label: Heartbeat line
+      description: >-
+        One `hb` line from `~/Library/Logs/Waylock.log`, taken around the
+        moment it went wrong. Add the lines before and after if you can.
+      placeholder: "17:17:11  hb absent=11.0s phase=armed ch=3 idle=43s locked=0 ..."
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: "Apple menu, About This Mac. Include the build if shown."
+      placeholder: "27.0.1"
+    validations:
+      required: true
+  - type: input
+    id: key-device
+    attributes:
+      label: Key device name
+      description: The name ticked under Menu, Key Device.
+      placeholder: "Amazfit Helio Strap"
+    validations:
+      required: true
+  - type: input
+    id: window
+    attributes:
+      label: Away window shown in the menu
+      description: The value ticked under the away window, or "Automatic" and its value.
+      placeholder: "15 s"
+    validations:
+      required: true
+  - type: dropdown
+    id: enabled
+    attributes:
+      label: Enabled
+      description: Was Waylock switched on? A disabled app scans and never locks.
+      options:
+        - "Yes"
+        - "No"
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you were doing at the time.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true

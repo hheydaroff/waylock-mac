@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # create the release and upload its asset
+  actions: read     # look up the CI result for the tagged commit
+
+# Never cancel a release half-published.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, package, publish
+    runs-on: macos-15   # arm64, like the app
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Print toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # Tests are not repeated here: ci.yml already ran them on this commit.
+      # This step turns that assumption into a check, so a tag pushed on a
+      # commit CI has not passed fails instead of shipping untested code.
+      - name: Require a passing CI run for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" \
+            --status success --json databaseId --jq length)
+          echo "successful ci.yml runs for $GITHUB_SHA: $passed"
+          test "$passed" -ge 1
+
+      - name: Build the app bundle
+        run: ./build.sh
+
+      # Same proof as ci.yml: verify the artifact, do not trust the script.
+      - name: Verify the bundle
+        run: |
+          codesign --verify --deep --strict build/Waylock.app
+          codesign -dv build/Waylock.app 2>&1 | grep -x 'Identifier=io.github.hheydaroff.waylock'
+          plist=build/Waylock.app/Contents/Info.plist
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = io.github.hheydaroff.waylock
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$plist")" = true
+
+      - name: Zip the app
+        run: ditto -c -k --keepParent build/Waylock.app "Waylock-$GITHUB_REF_NAME.zip"
+
+      # The signature is ad hoc (the private lock API rules out notarisation),
+      # so say so in the notes; --generate-notes appends the changelog.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "Waylock-$GITHUB_REF_NAME.zip" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Apple silicon, macOS 13 or later. Ad-hoc signed and not notarised: after unzipping, right-click the app and choose Open the first time." \
+            --generate-notes

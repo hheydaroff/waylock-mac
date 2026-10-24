@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch or PR makes the in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-bundle:
+    name: Build, test, bundle
+    # macos-15 is arm64, matching the arm64-only app. The Bluetooth stack is
+    # never touched at build or test time, so a hosted VM is enough.
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Print toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # Zero warnings is a project rule. The flag makes it a build failure
+      # instead of a convention that erodes.
+      - name: Build with warnings as errors
+        run: swift build -Xswiftc -warnings-as-errors
+
+      - name: Run tests
+        run: swift test
+
+      - name: Build the app bundle
+        run: ./build.sh
+
+      # build.sh prints its own checks, but a script that reports success is not
+      # proof. Re-verify the artifact from outside: the signature is intact, the
+      # identifier is the one macOS keys Bluetooth permission to, and the plist
+      # still makes this a menu bar app with no Dock icon.
+      - name: Verify the bundle
+        run: |
+          codesign --verify --deep --strict build/Waylock.app
+          codesign -dv build/Waylock.app 2>&1 | grep -x 'Identifier=io.github.hheydaroff.waylock'
+          plist=build/Waylock.app/Contents/Info.plist
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = io.github.hheydaroff.waylock
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$plist")" = true
+
+      # ditto keeps the signature and symlinks intact; upload-artifact's own
+      # zipping does not preserve them for a directory tree.
+      - name: Zip the app
+        run: ditto -c -k --keepParent build/Waylock.app Waylock.zip
+
+      - name: Upload the app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Waylock-app
+          path: Waylock.zip
+          retention-days: 7
+          compression-level: 0   # already a zip

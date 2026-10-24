@@ -1,77 +1,88 @@
 # Waylock
 
-Locks your Mac when your Bluetooth earbuds move out of range.
+Waylock pairs with one Bluetooth device you already carry and locks your Mac when that device's advertisements have been silent for a window measured on your own desk.
 
-Built because "lock your screen when you walk away" is still not something macOS
-does, and every RSSI-proximity app out there assumes an iPhone or a fixed RSSI
-threshold. This one keys on **absence**, not signal strength — because on
-earbuds, signal strength does not work.
+<a href="https://github.com/hheydaroff/waylock-mac/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/hheydaroff/waylock-mac/actions/workflows/ci.yml/badge.svg"></a>
+<a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+<img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13%2B-lightgrey">
+<img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-orange">
 
-Tested against a Galaxy Buds3 Pro and an Amazfit Helio Strap on macOS 27.0.1
-(M4 Max).
+It keys on absence, not signal strength, because on earbuds signal strength does not work. Tested with a Galaxy Buds3 Pro and an Amazfit Helio Strap on macOS 27.0.1 (M4 Max).
 
-Every decision here was driven by a measurement, including several that
-contradicted the obvious design. The dead APIs, RSSI numbers, threshold
-baselines and identity findings are recorded in **[FINDINGS.md](FINDINGS.md)** —
-read that before changing the window, the matcher, or the lock path.
+## What you see
 
-## Verified end to end
+Click the menu bar item while the key device is nearby:
 
-Real walk-away, live mode, Galaxy Buds3 Pro in ears (`~/Library/Logs/Waylock.log`,
-local time):
-
-```
-17:17:11  hb absent=11.0s phase=armed ch=3 idle=43s locked=0   <- counting up
-17:17:15  AWAY 15s -> locking
-17:17:15  lock: confirmed (rc=0)                              <- verified, not assumed
-17:17:22  hb absent=21.5s phase=lockedOut locked=1
-17:17:22  re-armed: key back                                  <- Touch ID, buds back
-17:17:32  hb absent=0.4s phase=armed locked=0
-```
-
-`hb` lines are a 10 s heartbeat recording every input the decision uses
-(`absent`, `phase`, channel count, HID idle, locked, enabled, window). They
-exist because the first live failure produced a log with *nothing* in it,
-which is indistinguishable from a dozen different causes.
-
-If it ever seems not to work, read the heartbeat first: `absent` climbing past
-`window` with `locked=0` is a lock-API problem; `absent` staying near zero means
-the key device is still in range — i.e. it never left with you.
-
-### Verified on the Amazfit Helio Strap
-
-```
-17:57:45  hb absent=2.3s  phase=armed      idle=33s
-17:57:55  hb absent=12.3s phase=armed      idle=43s   <- walking away
-17:57:58  AWAY 15s -> locking
-17:57:59  lock: confirmed (rc=0)
-17:58:06  hb absent=22.8s phase=lockedOut  locked=1
-17:58:12  re-armed: key back
-17:58:26  hb absent=1.2s  phase=armed      locked=0
+```text
+Armed — key is present
+Amazfit Helio Strap · -57 dBm · 1s ago
+─────────────────────────────
+✓ Enabled
+  Away for                      ▸  Automatic · learned 12 s
+                                   ─────────────────────────
+                                   8 seconds · may false-lock
+                                   10 seconds · may false-lock
+                                   15 seconds
+                                   20 seconds
+                                   30 seconds
+  Key Device                    ▸  (named advertisers, rebuilt on open)
+  Don't lock while I'm typing
+─────────────────────────────
+  Lock Now (test)
+  Start at Login
+  Restart Scanning
+─────────────────────────────
+  Quit Waylock
 ```
 
-At-desk absence stayed at 2.3-2.6 s over the preceding 30 s, so the strap is
-steadier than the buds and has more headroom against the window.
+The status line also reads `Key is away…`, `Locked`, `Waiting for key device`, `Waiting for Bluetooth permission` or `Bluetooth unavailable`, and it is prefixed `DRY RUN · ` when the lock is disabled for testing. The log shows what happens when you walk away (`~/Library/Logs/Waylock.log`, local time, Galaxy Buds3 Pro in your ears):
 
-Two failure modes this key shares with any wearable, both worth knowing:
+```text
+2026-10-19 17:17:11  hb absent=11.0s phase=armed ch=3 idle=43s locked=0   <- counting up
+2026-10-19 17:17:15  AWAY 15s -> locking
+2026-10-19 17:17:15  lock: confirmed (rc=0)                              <- verified, not assumed
+2026-10-19 17:17:22  hb absent=21.5s phase=lockedOut locked=1
+2026-10-19 17:17:22  re-armed: key back                                  <- Touch ID, buds back
+2026-10-19 17:17:32  hb absent=0.4s phase=armed locked=0
+```
 
-- **Key left behind** (strap on the desk, buds in the case) -> the Mac stays
-  unlocked, because the key really is present. Fail-open.
-- **Key battery dies** -> the Mac locks on you mid-sentence. Fail-closed, so it
-  is safe, just annoying. This is why the activity gate exists.
+## Quick start
 
-## Adding a new key device
+```sh
+swift test
+./build.sh
+open build/Waylock.app
+```
 
-Two things must be true of a device, and the app checks both.
+The first launch asks for Bluetooth permission; approve it from an unlocked screen. Every rebuild changes the code signature, so the next launch asks again.
 
-**1. It advertises a name.** Menu -> Key Device lists every named advertiser with
-live RSSI and measured rate, e.g. `Amazfit Helio Strap  -57 dBm  40/min`.
-Anything under ~12/min is flagged `! too rare` — a device heard every 11 s cannot
-support a usable window, and the menu is a better place to learn that than a
-walk-away test.
+## What this is not
 
-**2. Its window gets measured, not guessed.** Advertising rate differs by up to
-5x between devices, so the away window is learned per device:
+- **It does not measure distance.** It locks when the key device goes out of Bluetooth LE range, which is not a distance you choose.
+- **It is not a security control.** Leave the key device on your desk and the Mac stays unlocked: it fails open.
+- **It calls a private API** (`SACLockScreenImmediate`), so it cannot ship on the App Store. This is a personal build.
+- **It is ad-hoc signed.** No notarization, and macOS treats each rebuild as a new app.
+
+## How the window is chosen
+
+The window is the only real tuning parameter, and it was set from the distribution of the gap between advertisements on any key channel, not from intuition. 600 samples over 10 minutes at the desk:
+
+| median | p90 | p95 | p99 | max |
+|---|---|---|---|---|
+| 1.0 s | 3.3 s | 4.5 s | 7.6 s | 10.2 s |
+
+A 10 s window false-locked a seated user (t=145 s); a 15 s window did not. The default is 15 s, 47% above the worst gap observed. Walk-away silence is unbounded once you leave, so a wider window costs a few seconds of latency, never a missed lock.
+
+The window is then learned per device. It settles after 180 s on a new key device, at `worst gap x 1.5` clamped to 12-60 s. To re-measure a device, run `swift run waylock-tools --calibrate 10` (read only; add `--apply` to keep the result). The full derivation, the dead ends and the corrections are in [FINDINGS.md](FINDINGS.md).
+
+<details>
+<summary>Choosing a key device</summary>
+
+Menu -> **Key Device** lists every advertiser that announces a name, with live RSSI and measured rate, for example `Amazfit Helio Strap  -57 dBm  40/min`. The tick marks the one in use. Anything under about 12/min is flagged `too rare`: a device heard every 11 s cannot support a usable window, and the menu is a better place to learn that than a walk-away test. Picking a device clears the learned address set, because those addresses belonged to the previous one. `Type a name…` takes a name the list does not show.
+
+Matching is a case-insensitive substring of the advertised name, so `buds3` covers both `Buds3 Pro` and `Buds3 Pro de <owner>`, and address rotation needs no special handling.
+
+A device needs two things: it advertises a name, and its window gets measured rather than guessed. Advertising rate differs by up to 5x between devices, so the window is learned per device:
 
 | Stage | Window | Why |
 |---|---|---|
@@ -79,175 +90,74 @@ walk-away test.
 | After ~3 min and 20+ gaps | learned | `worst gap x 1.5`, clamped to 12-60 s |
 | You pick one by hand | yours | always wins; "Automatic" in the menu goes back to measurement |
 
-An absence and a slowly-advertising device look identical in a raw gap list, so
-gaps beyond 10x the median are discarded as absences rather than learned as
-behaviour — a 45 s trip to a meeting must not teach the app that 45 s is normal.
-
-Measured so far: strap -> **12 s** (floor), Buds3 Pro -> **15.3 s** from a 10.2 s
-worst case. Those match the values that were hand-tuned before any of this was
-automated, which is the point.
+Gaps beyond 10x the median are discarded as absences rather than learned as behavior, so a 45 s trip to a meeting does not teach the app that 45 s is normal. Measured so far: the strap gives **12 s** (the floor) and the Buds3 Pro gives **15.3 s** from a 10.2 s worst case. Those match the values hand-tuned before any of this was automated.
 
 ```sh
-# measure a device and see the distribution (no --apply = read only)
-./build/waylock-tools --calibrate 10
-./build/waylock-tools --calibrate 10 --apply
+swift run waylock-tools --calibrate 10           # measure and show the distribution, read only
+swift run waylock-tools --calibrate 10 --apply   # keep the result
+swift run waylock-scan 150                       # list every advertiser for 150 s
+swift run waylock-watch "Amazfit" 60             # watch one named device for 60 s
 ```
 
-## Choosing your own key device
+</details>
 
-Menu -> **Key Device** lists every advertiser that announces a name, with its
-current RSSI, ticked against the one in use. Picking one clears the learned
-address set, because those addresses belong to the previous device.
+<details>
+<summary>Why phones and the Apple Watch mostly do not work</summary>
 
-Matching is a case-insensitive substring of the advertised name, so `buds3`
-covers both `Buds3 Pro` and `Buds3 Pro de <owner>`, and address rotation (three
-different addresses seen for the same buds) needs no special handling.
+Phones and watches advertise no name, so they cannot be picked. A 150 s scan found 116 Apple beacons, every one nameless, across 7+ rotating addresses. The iPhone and Watch appear only as anonymous Continuity and Find My payloads, with nothing to distinguish yours from a neighbor's iPhone. The name appears only after bonding, and whether CoreBluetooth then hands back a stable identifier is untested. Devices that name themselves and advertise continuously (earbuds, a fitness band) are the workable keys.
 
-**Phones and watches advertise no name, so they cannot be picked.** A 150 s scan
-found 116 Apple beacons, every one nameless, across 7+ rotating addresses — the
-iPhone and Watch appear only as anonymous Continuity / Find My payloads, with
-nothing to distinguish yours from a neighbour's. Devices that name themselves
-and advertise continuously (earbuds, a fitness band) are the workable keys.
+Why not RSSI thresholds: sitting still at the desk, the buds wandered between -70 and -83 dBm, and on re-entry read -89 dBm while the wearer was back at the desk. Your own head blocks 2.4 GHz, so any fixed threshold either fires while you sit still or only after you have left the building. A stationary, non-worn device on the same Mac measured -75.8 dBm ± 1.6 dB over 60 s.
 
-## When someone else owns the same model
+What else was ruled out on this machine: `IOBluetoothDevice.rawRSSI()` returns 0, `system_profiler` reports RSSI only for a connected device, and `CGSession -suspend` is gone. CoreBluetooth does report advertisement RSSI, and `SACLockScreenImmediate` resolves from `login.framework` and works. RSSI cannot tell 5 m from 0 m on earbuds.
 
-Name matching alone fails open: a colleague's `Amazfit Helio Strap` is another
-matching channel, the union never goes absent, and the Mac stays unlocked while
-you walk away. So the app learns the *address set* of the device you picked and
-accepts a name match only when
+Why not one channel: the buds advertise three independent streams (`Buds3 Pro`, `Buds3 Pro de <owner>`, `Galaxy Buds3 Pro (XXXX) LE`). Each goes quiet for up to 31 s while you sit at the desk, and a single-channel detector falsely locked 5 times in 3 minutes. They almost never go quiet together, so the rule is all channels absent, which also survives address rotation and brief occlusion. Audio playback roughly halves the packet rate (0.9 Hz to 0.47 Hz); the window absorbs that.
+
+</details>
+
+<details>
+<summary>When someone else owns the same model</summary>
+
+Name matching alone fails open: a colleague's `Amazfit Helio Strap` is another matching channel, the union never goes absent, and the Mac stays unlocked while you walk away. So the app learns the address set of the device you picked and accepts a name match only when
 
 - the address is one it has learned, or
-- no other same-named device is in range — the signature of a genuine rotation.
+- no other same-named device is in range, which is the signature of a genuine rotation.
 
-An impostor always shows up alongside yours, so it never gets learned. This is
-verified deterministically in `./build/waylock-tests` — no radio, and no
-impostor hardware needed.
+An impostor always shows up alongside yours, so it never gets learned. `swift test` verifies this deterministically, with no radio and no impostor hardware. Identity is name plus a learned address set, never a pinned UUID.
 
-## What the measurements say
+</details>
 
-Everything below was measured on the actual machine, not assumed.
+<details>
+<summary>Heartbeat and log guide</summary>
 
-| Question | Answer |
-|---|---|
-| Does CoreBluetooth report RSSI? | Yes, ~0.4 Hz for the buds' main stream |
-| Does `IOBluetoothDevice.rawRSSI()` work? | **No** — returns 0 on this hardware |
-| Does `system_profiler` give RSSI? | Only for a *connected* device; useless here |
-| Is `CGSession -suspend` still available? | **No** — removed on modern macOS |
-| Does `SACLockScreenImmediate` work? | Yes, resolves from `login.framework` |
-| Do the buds rotate their BLE address? | **No** — static public address, no rotation in 8 min |
-| Can RSSI distinguish 5 m from 0 m? | **No** — too noisy on earbuds (see below) |
-
-### Why RSSI thresholds fail here
-
-Sitting still at the desk, the buds' RSSI wandered between −70 and −83 dBm,
-and on re-entry it read −89 dBm while the wearer was back at the desk. Your own
-head blocks 2.4 GHz. Any fixed threshold that fires at −85 either fires while
-you are sitting still, or only fires after you are already out of the building.
-
-Reference point: a *stationary, non-worn* BLE device on the same Mac measured
-−75.8 dBm ± 1.6 dB over 60 s. Earbuds are an order of magnitude noisier than
-that because the antenna is against your skull.
-
-### Why single-channel presence fails
-
-The buds advertise **three** independent streams:
-
-| Channel | Rate | At desk | When away |
-|---|---|---|---|
-| `Buds3 Pro` | 0.40 Hz | −77…−83 | silent |
-| `Buds3 Pro de <owner>` | 0.17 Hz | −70…−78 | silent |
-| `Galaxy Buds3 Pro (XXXX) LE` | 0.11 Hz | −53…−60 | silent |
-
-Individually they go quiet for **up to 31 s** while you sit at the desk — a
-single-channel detector falsely locked 5 times in 3 minutes. But they almost
-never go quiet *together*. So the rule is **all channels absent**, which is
-also rotation-proof and survives the buds being briefly occluded.
-
-Gate on the union, not on any one stream.
-
-### The one open tuning number
-
-The union gap at the desk is the false-lock risk, and it is the only number
-that decides the default. Measured over a 10-minute at-desk baseline
-(600 samples):
-
-| Window | False locks |
-|---|---|
-| 10 s | 1 — fired at t=145 s while sitting at the desk |
-| 15 s | 0 |
-
-Gap distribution: median 1.0 s, p90 3.3 s, p95 4.5 s, p99 7.6 s, **max 10.2 s**.
-Default is 15 s, i.e. 47% above the observed worst case rather than below it.
-Walk-away silence is unbounded once you actually leave, so a wider window only
-costs a few seconds of latency, never a missed lock. Raise it to 20–30 s if you
-still see false locks; every hold and every trigger is logged.
-
-Two things make this number worse in practice: audio playback roughly halves
-the packet rate (0.9 Hz -> 0.47 Hz), and the buds change BLE address
-periodically (two distinct addresses for the same buds were observed). Both are
-handled — the lower rate is absorbed by the window, and the address change by
-matching on name instead of UUID.
-
-## How the code is organised
-
-Four directories, one rule: **Core never imports AppKit or CoreBluetooth.**
-
-| | |
-|---|---|
-| `Core/` | the decisions: settings, window derivation, identity, tracking, the lock decision, menu copy |
-| `App/` | the adapters: CoreBluetooth, the lock API, UserDefaults, AppKit menu, wiring |
-| `Tools/` | the two commands that need a real radio (`--selftest`, `--calibrate`) |
-| `Tests/` | assertions against Core only — no radio, no permission prompt, no locking |
-
-Because the decision logic is a set of values rather than a menu bar app, a
-walk-away, a colleague's identical strap and a false lock at the desk all replay
-in milliseconds under `build/waylock-tests`. The parts that cannot be tested that
-way are the parts that talk to macOS, and those are kept as thin as possible.
-
-## Build
+`hb` lines are a 10 s heartbeat recording every input the decision uses: `absent`, `phase`, channel count, HID idle, `locked`, `enabled` and the window. They exist because the first live failure produced a log with nothing in it, which is indistinguishable from a dozen different causes.
 
 ```sh
-./build.sh                  # builds and signs all three
-./build/waylock-tests       # -> CORE OK — 97 checks
-open build/Waylock.app
+tail -f ~/Library/Logs/Waylock.log
+defaults read io.github.hheydaroff.waylock
 ```
 
-No Xcode project. `swiftc` plus a hand-assembled bundle, ad-hoc signed (TCC
-keys Bluetooth permission to the bundle identity, so signing is required).
+Check `enabled=1` first: a disabled app scans, reports present and never locks. Then read `absent`. Climbing past the window with `locked=0` is a lock-API problem. Staying near zero means the key device is still in range, so it never left with you.
 
-The private lock API rules out the App Store and notarisation. This is a
-personal build.
+The same strap on a real walk-away, at-desk absence 2.3-2.6 s beforehand (steadier than the buds):
 
-First launch asks for Bluetooth permission. Deny it and the menu reads
-"Bluetooth unavailable".
-
-## Use
-
-Menu bar icon:
-
-| Icon | Meaning |
-|---|---|
-| `lock.open` | armed, buds present |
-| `lock.rotation` | buds gone, counting down |
-| `lock.fill` | locked |
-| `lock.slash` | disabled or waiting for the buds |
-
-Menu has the away window (8/10/15/20/30 s), a "don't lock while I'm typing"
-toggle, Start at Login, and Lock Now for testing.
-
-Log: `~/Library/Logs/Waylock.log` (local time)
-
-`Start at Login` needs the app in a stable location — copy it to
-`/Applications` first, or `SMAppService` will refuse to register it.
-
-## Bluetooth permission survives nothing
-
-The app is ad-hoc signed by `build.sh`, and **every build changes the signature**.
-macOS keys the Bluetooth grant to that signature, so the next launch is a
-stranger: it asks again, and the old grant no longer matches. The evidence is in
-the system log, not in the app:
-
+```text
+17:57:55  hb absent=12.3s phase=armed      idle=43s   <- walking away
+17:57:58  AWAY 15s -> locking
+17:57:59  lock: confirmed (rc=0)
+17:58:06  hb absent=22.8s phase=lockedOut  locked=1
+17:58:12  re-armed: key back
 ```
+
+Menu bar icon: `lock.open` armed, key present; `lock.rotation` key gone, counting down; `lock.fill` locked; `lock.slash` disabled or waiting for the key. To rehearse without locking, launch the app with `WAYLOCK_DRYRUN=1` in its environment: it logs `WOULD LOCK` and never locks. `swift run waylock-tools --selftest 60` runs the detection path against the real radio and prints to the terminal only.
+
+</details>
+
+<details>
+<summary>Permissions and the code signature</summary>
+
+`build.sh` signs ad hoc, and every build changes the signature. macOS keys the Bluetooth grant to that signature, so the next launch is a stranger and asks again. The evidence is in the system log, not in the app:
+
+```text
 tccd: Failed to match existing code requirement for io.github.hheydaroff.waylock
       service kTCCServiceBluetoothAlways
       cdhash H"6f8fa67b…"   <- the grant that exists
@@ -255,18 +165,9 @@ tccd: Failed to match existing code requirement for io.github.hheydaroff.waylock
 tccd: AUTHREQ_PROMPTING
 ```
 
-While the screen is locked the prompt cannot appear, and CoreBluetooth simply
-never reports a state — which is why the menu says **"Waiting for Bluetooth
-permission"** rather than claiming all is well. Unlock, approve, done.
+While the screen is locked the prompt cannot appear and CoreBluetooth never reports a state, which is why the menu says "Waiting for Bluetooth permission" instead of claiming all is well. Unlock and approve. Deny it and the menu reads "Bluetooth unavailable". The command-line runs are unaffected: `swift test` needs no Bluetooth, and `waylock-tools` inherits the terminal's grant.
 
-Two consequences worth knowing:
-
-- **The CLI runs are unaffected.** `build/waylock-tests` needs no Bluetooth at
-  all, and `build/waylock-tools` inherits the terminal's grant, so detection can
-  be tested immediately after a rebuild — the app bundle may be waiting for
-  permission while the same logic runs fine from a shell.
-- **You can stop the prompts** by signing with a stable identity instead of
-  ad-hoc. One-time, and it needs a Keychain approval:
+To stop the prompts, sign with a stable identity once (needs a Keychain approval):
 
 ```sh
 openssl req -x509 -newkey rsa:2048 -keyout /tmp/wl.key -out /tmp/wl.crt \
@@ -278,59 +179,58 @@ security import /tmp/wl.p12 -k ~/Library/Keychains/login.keychain-db -P "" -T /u
 # then in build.sh: codesign -s "Waylock Dev" --force --identifier io.github.hheydaroff.waylock "$APP"
 ```
 
-## Design notes
+`Start at Login` needs the app in a stable location: copy it to `/Applications` first, or `SMAppService` refuses to register it.
 
-- **Never lock mid-keystroke.** The lock requires `HIDIdleTime` to have reached
-  the whole window, not a token few seconds. While you type or move the mouse it
-  cannot lock at all — and it costs no latency, because the idle timer starts
-  when the key signal dies, not when the decision is made.
-- **Verify the lock.** `SACLockScreenImmediate` returns success even when
-  nothing happened. After calling it the app polls `CGSSessionScreenIsLocked`
-  for 3 s and logs the truth.
-- **Re-arm only on sustained presence.** After a lock it requires 3 s of
-  continuous presence before arming again, so a single stray packet does not
-  re-arm it while you are still away.
-- **Identity is name + a learned address set**, never a pinned UUID. The name
-  survives rotation (`"Buds3 Pro"` matched three different addresses for the
-  same device); the address set is what stops a colleague's identical model from
-  counting as present. A rotated address is adopted only when no other
-  same-named device is in range — the signature of rotation rather than an
-  impostor.
+</details>
 
-## Testing without locking yourself out
+<details>
+<summary>Design rules</summary>
 
-```sh
-# every decision, no radio, no permission prompt, no locking
-./build/waylock-tests
+- **Never lock mid-keystroke.** The lock requires `HIDIdleTime` to have reached the whole window. It costs no latency, because the idle timer starts when the key signal dies, not when the decision is made.
+- **Verify the lock.** `SACLockScreenImmediate` returns success even when nothing happened, so the app polls `CGSSessionScreenIsLocked` for 3 s and logs the truth.
+- **Re-arm only on sustained presence.** After a lock it needs 3 s of continuous presence, so one stray packet does not re-arm it while you are away. A 20 s cooldown follows each lock.
+- **Failures are loud.** CoreBluetooth that never reaches `poweredOn` looks identical to "the key is not here", so the radio state and every decision input are logged.
 
-# the detection path against the real radio, terminal output only
-./build/waylock-tools --selftest 60
+</details>
 
-# existing behaviour, end to end but never touching the screen
-open build/Waylock.app --env WAYLOCK_DRYRUN=1
-```
+<details>
+<summary>Known limits</summary>
 
-`-a` takes an app *name*, not a path, so `open -a build/Waylock.app` fails.
+- The key must be on and advertising. In the case, on the charger, powered off, or paired to another device first, there is no signal and the Mac locks. That is fail-safe, and it means opening the case at your desk re-arms it. Two failure modes any wearable shares: a key left behind keeps the Mac unlocked (fail-open), and a dead key battery locks it mid-sentence (fail-closed, which is why the activity gate exists).
+- Bonded iPhones advertise continuously but may be replayed from the macOS cache, which would make absence-based detection impossible for them. Under investigation; see FINDINGS.md.
+- A colleague with the same model is handled by the learned address set, but a device that rotates its address at the exact moment both of you are out of range could still confuse it. Not defended against.
+- Warm-up fail-open: if the app launches while the key is out of range it has never seen one, so it sits at `noKey` and will not lock until the key is seen once. The alternative is locking the instant you launch it.
+- The first 3 minutes on a new device lock late (20 s warm-up) while the window is measured.
+- No auto-unlock. `login.framework` exports no unlock symbol, and injecting your password via Accessibility is not worth the attack surface. Touch ID stays the unlock path.
 
-The test binary covers windows, identity, tracking, the lock decision and the
-menu copy. The tools cover what only the radio can answer.
+</details>
 
-## Known limits
+<details>
+<summary>Build targets</summary>
 
-- The key must be on and advertising. In the case, on the charger, powered off,
-  or paired to another device first, there is no signal — the Mac locks. That is
-  fail-safe, and also means opening the case at your desk re-arms it.
-- **Bonded iPhones advertise continuously but may be replayed from the macOS
-  cache**, which would make absence-based detection impossible for them. Under
-  investigation; see FINDINGS.md.
-- A colleague with the *same model* is handled by the learned address set, but
-  a device that rotates its address at the exact moment both of you are out of
-  range could still confuse it. Not defended against; not worth it at a desk.
-- **Warm-up fail-open:** if the app launches while the key is out of range it
-  has never seen one, so it sits at `noKey` and will not lock until the key is
-  seen once. Deliberate — the alternative is locking the instant you launch it.
-- **The first 3 minutes on a new device lock late** (20 s warm-up) while the
-  window is measured. Also deliberate, for the same reason.
-- No auto-unlock. `login.framework` exports no unlock symbol; unlocking means
-  injecting your password via Accessibility, which is not worth the attack
-  surface. Touch ID stays the unlock path.
+No Xcode project: `./build.sh` runs `swiftc` and assembles the bundle by hand. One rule holds everywhere: Core never imports AppKit or CoreBluetooth.
+
+| Target | Contents |
+|---|---|
+| `Core/` | the decisions: settings, window derivation, identity, tracking, the lock decision, menu copy |
+| Adapters (`App/`) | CoreBluetooth, the lock API, UserDefaults, logging; the only code that talks to macOS |
+| `Tools/` | the commands that need a real radio: `--selftest`, `--calibrate`, `waylock-scan`, `waylock-watch` |
+| `Tests/` | assertions against Core only: no radio, no permission prompt, no locking |
+| App bundle | `build/Waylock.app`: Core, the adapters and the AppKit menu wiring, ad-hoc signed |
+
+Because the decisions are values rather than a menu bar app, a walk-away, a colleague's identical strap and a false lock at the desk all replay in milliseconds under `swift test`. `swift build` compiles the same targets without running anything.
+
+</details>
+
+<details>
+<summary>Docs</summary>
+
+- [CONTEXT.md](CONTEXT.md): glossary (key device, channel, sighting, arrival, away window)
+- [FINDINGS.md](FINDINGS.md): the measurements, dead ends and corrections behind every constant
+- [docs/adr/](docs/adr/): architecture decision records
+- [AGENTS.md](AGENTS.md): the contract for coding agents working in this repo
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to build, test and send a change
+- [SECURITY.md](SECURITY.md): threat model and how to report a vulnerability
+- [LICENSE](LICENSE): MIT
+
+</details>
