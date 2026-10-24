@@ -2,17 +2,16 @@ import AppKit
 import Foundation
 import ServiceManagement
 
-/// The menu bar app: it wires the modules together and is the only place that
-/// decides nothing.
+/// The menu bar app: the only place that talks to AppKit, and it decides nothing.
 ///
-/// Every decision lives in `Core` (what to scan for, how long silence counts,
-/// whether to lock) or in the adapters (`Radio`, `Locker`, `SettingsStore`). What
-/// is left here is the timer, the icon and the menu.
+/// Every decision lives in `Session` (when to lock, what to log) and the modules
+/// under it. This type feeds the session the time and the machine's readings,
+/// then performs the effects it returns: call the locker, write the log, save the
+/// settings. What is left is the timer, the icon and the menu.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let store: SettingsStore
-    private var settings: Settings
-    private var tracker: Tracker
-    private var learning: Learning
+    private var session: Session
     private let radio = Radio()
 
     private var statusItem: NSStatusItem!
@@ -20,18 +19,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var deviceLine: NSMenuItem!
     private var keySubmenu: NSMenu?
 
-    private var phase: Phase = .noKey
-    private var lastLockAt: Date?
     private var lastModel: [MenuItem] = []
-    private var lastBeat = Date(timeIntervalSince1970: 0)
-    private var lastHoldLog = Date(timeIntervalSince1970: 0)
-    private var lastMenuUpdate = Date(timeIntervalSince1970: 0)
+    private var lastMenuUpdate = Date.distantPast
 
     init(settings: Settings, store: SettingsStore) {
         self.store = store
-        self.settings = settings
-        self.tracker = Tracker(keyName: settings.keyName, known: settings.knownKeyAddresses)
-        self.learning = Learning(beganAt: Date())
+        self.session = Session(settings: settings, now: Date())
         super.init()
     }
 
@@ -39,148 +32,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = symbol(phase.symbol)
+        statusItem.button?.image = symbol(session.phase.symbol)
 
         radio.log = { log($0) }
-        radio.shouldRecover = { [weak self] in self?.settings.enabled ?? true }
+        radio.shouldRecover = { [weak self] in self?.session.settings.enabled ?? true }
         radio.onSighting = { [weak self] in self?.receive($0) }
         radio.start()
 
         refreshMenu(now: Date(), force: true)
 
-        let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.tick()
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            // Sound: the timer is added to RunLoop.main below, so this block only
+            // ever fires on the main thread. Timer's block is merely not annotated.
+            MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
 
+        let settings = session.settings
         let window = settings.awayWindow
         log("Waylock started (window=\(Int(window.seconds))s \(window.label), key='\(settings.keyName)'"
             + (settings.dryRun ? ", DRY RUN — will not lock" : "") + ")")
     }
 
-    // MARK: sightings
+    // MARK: session
 
     private func receive(_ sighting: Sighting) {
-        let events = tracker.sight(sighting, now: Date())
-        guard !events.isEmpty else { return }
-        for event in events { log(describe(event, known: tracker.knownAddresses.count)) }
-
-        // The core reports that an address was adopted; persisting it is this
-        // layer's job, which keeps the identity rule free of I/O.
-        if tracker.knownAddresses != settings.knownKeyAddresses {
-            settings.knownKeyAddresses = tracker.knownAddresses
-            store.save(settings)
-        }
+        perform(session.sight(sighting, now: Date()), at: Date())
     }
-
-    // MARK: core loop
 
     private func tick() {
         let now = Date()
-        let idle = Locker.hidIdleSeconds()
-        tracker.prune(now: now)
-        settleWindow(now: now)
-
-        let absent = tracker.absent(now: now)
-        let locked = Locker.screenIsLocked()
-        let previous = phase
-
-        let judgment = LockDecision.judge(LockInput(
-            phase: phase,
-            enabled: settings.enabled,
-            absentFor: absent,
-            window: settings.awayWindow.seconds,
-            idleFor: idle,
-            respectActivity: settings.respectActivity,
-            dryRun: settings.dryRun,
-            screenLocked: locked,
-            lastLockAt: lastLockAt,
-            now: now))
-
-        phase = judgment.phase
-        if previous == .lockedOut, phase == .armed { log("re-armed: key back") }
-        apply(judgment.action, trigger: "AWAY \(Int(absent ?? 0))s",
-              absent: absent, idle: idle, now: now)
-
-        statusItem.button?.image = symbol(phase.symbol)
-        heartbeat(absent: absent, idle: idle, locked: locked)
+        perform(session.tick(now: now, readings: readings()), at: now)
+        statusItem.button?.image = symbol(session.phase.symbol)
         refreshMenu(now: now)
     }
 
-    /// Once a device has produced enough real gaps, derive its window and stop
-    /// learning. A window chosen from two minutes of data would be chosen from the
-    /// quietest two minutes of the day, so this waits.
-    private func settleWindow(now: Date) {
-        guard let learned = learning.settle(now: now, arrivals: tracker.arrivals,
-                                            windows: settings.windows,
-                                            device: settings.device) else { return }
-        settings.windows.useLearned(learned.window, for: settings.device)
-        store.save(settings)
-        log(String(format: "window learned: %.1fs (worst kept gap %.1fs of %d samples) — warm-up was %.0fs",
-                   learned.window, learned.worst, learned.kept, Windows.warmup))
+    private func readings() -> Readings {
+        Readings(idleFor: Locker.hidIdleSeconds(), screenLocked: Locker.screenIsLocked())
     }
 
-    /// Both lock entry points come through here, so the gates cannot drift apart.
-    private func apply(_ action: LockAction, trigger: String,
-                       absent: Double?, idle: Double?, now: Date) {
-        switch action {
-        case .none, .holdCooldown:
-            break
-        case .holdActive:
-            // Throttled: this repeats every tick while the signal is gone and you
-            // are still working.
-            guard now.timeIntervalSince(lastHoldLog) > 30 else { return }
-            lastHoldLog = now
-            log("away \(Int(absent ?? 0))s but user active"
-                + " (\(String(format: "%.0f", idle ?? 0))s idle) — holding")
-        case .alreadyLocked:
-            log("\(trigger) but screen already locked — nothing to do")
-            lastLockAt = now
-        case .dryRun:
-            log("\(trigger) -> WOULD LOCK (dry-run)")
-            lastLockAt = now
-        case .lock:
-            log("\(trigger) -> locking")
-            // lockedOut only on a verified lock, so a failed attempt retries on the
-            // next tick instead of waiting out the cooldown.
-            if Locker.lock() {
-                lastLockAt = now
-                phase = .lockedOut
+    /// Carry out what the session decided, in order. This is the only place the
+    /// locker is called, and it is reached only through a `.lock` effect, which
+    /// the session emits only after `LockDecision` said so.
+    private func perform(_ effects: [Effect], at now: Date) {
+        for effect in effects {
+            switch effect {
+            case let .log(message):
+                log(message)
+            case .rearm:
+                log("re-armed: key back")
+            case let .reportKey(event):
+                log(describe(event, known: session.tracker.knownAddresses.count))
+            case .saveSettings:
+                store.save(session.settings)
+            case let .lock(trigger):
+                log("\(trigger) -> locking")
+                session.lockFinished(verified: Locker.lock(), at: now)
             }
         }
-    }
-
-    /// Every 10 s, record the exact inputs the decision was made from. Without this
-    /// a "nothing happened" log is indistinguishable from a dozen different causes,
-    /// which is what made the first live failure opaque.
-    private func heartbeat(absent: Double?, idle: Double?, locked: Bool) {
-        guard Date().timeIntervalSince(lastBeat) >= 10 else { return }
-        lastBeat = Date()
-        log("hb absent=\(absent.map { String(format: "%.1fs", $0) } ?? "never")"
-            + " phase=\(phase.label) ch=\(tracker.channels.count)"
-            + " idle=\(idle.map { String(format: "%.0fs", $0) } ?? "unreadable")"
-            + " locked=\(locked ? 1 : 0)"
-            + " enabled=\(settings.enabled ? 1 : 0)"
-            + " window=\(Int(settings.awayWindow.seconds))"
-            + " rssi=\(tracker.bestChannel()?.lastRSSI ?? 0)"
-            + " gaps=\(tracker.arrivals.count)"
-            + " named=\(tracker.named.count)")
     }
 
     // MARK: menu
 
     private func snapshot(now: Date) -> MenuSnapshot {
-        MenuSnapshot(phase: phase,
-                     enabled: settings.enabled,
-                     dryRun: settings.dryRun,
+        MenuSnapshot(phase: session.phase,
+                     enabled: session.settings.enabled,
+                     dryRun: session.settings.dryRun,
                      bluetooth: radio.state,
-                     keyName: settings.keyName,
-                     device: settings.device,
-                     window: settings.awayWindow,
-                     windows: settings.windows,
-                     bestChannel: tracker.bestChannel(),
-                     channelCount: tracker.channels.count,
-                     respectActivity: settings.respectActivity,
+                     keyName: session.settings.keyName,
+                     device: session.settings.device,
+                     window: session.settings.awayWindow,
+                     windows: session.settings.windows,
+                     bestChannel: session.tracker.bestChannel(),
+                     channelCount: session.tracker.channels.count,
+                     respectActivity: session.settings.respectActivity,
                      loginEnabled: SMAppService.mainApp.status == .enabled,
                      now: now)
     }
@@ -279,10 +204,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard menu === keySubmenu else { return }
         menu.removeAllItems()
         let now = Date()
-        let devices = tracker.named.values
+        let devices = session.tracker.named.values
             .filter { now.timeIntervalSince($0.lastSeen) < 60 }
             .sorted { $0.lastSeen > $1.lastSeen }
-        for item in MenuModel.keyDevices(devices, keyName: settings.keyName) {
+        for item in MenuModel.keyDevices(devices, keyName: session.settings.keyName) {
             menu.addItem(makeItem(item))
         }
     }
@@ -290,58 +215,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: actions
 
     @objc private func toggleEnabled() {
-        settings.enabled.toggle()
-        store.save(settings)
-        if settings.enabled { radio.restartScanning() }
-        log("enabled = \(settings.enabled)")
-        refreshMenu(now: Date(), force: true)
+        let now = Date()
+        perform(session.toggleEnabled(), at: now)
+        if session.settings.enabled { radio.restartScanning() }
+        refreshMenu(now: now, force: true)
     }
 
     @objc private func setWindow(_ item: NSMenuItem) {
         guard let action = item.representedObject as? MenuAction,
               case let .setWindow(seconds) = action else { return }
-        settings.windows.useManual(seconds, for: settings.device)
-        store.save(settings)
-        log("awayWindow = \(Int(seconds)) (manual for '\(settings.keyName)')"
-            + (seconds < 15 ? "  (below the measured 10.2s worst case — expect false locks)" : ""))
-        refreshMenu(now: Date(), force: true)
+        let now = Date()
+        perform(session.useManualWindow(seconds), at: now)
+        refreshMenu(now: now, force: true)
     }
 
     @objc private func useAutomaticWindow() {
-        settings.windows.forget(settings.device)
-        store.save(settings)
-        learning = Learning(beganAt: Date())
-        tracker.restartLearning()
-        log("awayWindow = automatic (re-learning from now, warm-up \(Int(Windows.warmup))s)")
-        refreshMenu(now: Date(), force: true)
+        let now = Date()
+        perform(session.useAutomaticWindow(now: now), at: now)
+        refreshMenu(now: now, force: true)
     }
 
     @objc private func toggleActivity() {
-        settings.respectActivity.toggle()
-        store.save(settings)
-        refreshMenu(now: Date(), force: true)
+        let now = Date()
+        perform(session.toggleActivity(), at: now)
+        refreshMenu(now: now, force: true)
     }
 
-    /// The user asked for a lock. The away gate does not apply; every safety gate
-    /// still does — a manual path that skipped dry-run once locked the screen
-    /// during a test.
+    /// The user asked for a lock. The session routes it through
+    /// `LockDecision.judgeManual`, so it meets the same safety gates as the tick.
     @objc private func lockNow() {
         let now = Date()
-        let absent = tracker.absent(now: now)
-        let judgment = LockDecision.judgeManual(LockInput(
-            phase: phase,
-            enabled: settings.enabled,
-            absentFor: absent,
-            window: settings.awayWindow.seconds,
-            idleFor: Locker.hidIdleSeconds(),
-            respectActivity: settings.respectActivity,
-            dryRun: settings.dryRun,
-            screenLocked: Locker.screenIsLocked(),
-            lastLockAt: lastLockAt,
-            now: now))
-        phase = judgment.phase
-        apply(judgment.action, trigger: "manual lock", absent: absent, idle: nil, now: now)
-        statusItem.button?.image = symbol(phase.symbol)
+        perform(session.lockNow(now: now, readings: readings()), at: now)
+        statusItem.button?.image = symbol(session.phase.symbol)
         refreshMenu(now: now, force: true)
     }
 
@@ -381,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.addButton(withTitle: "Use")
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        field.stringValue = settings.keyName
+        field.stringValue = session.settings.keyName
         alert.accessoryView = field
         if alert.runModal() == .alertFirstButtonReturn {
             let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -390,16 +295,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func setKey(_ name: String) {
-        settings.keyName = name
-        settings.knownKeyAddresses = []
-        tracker.setKey(name)
-        store.save(settings)
-        learning = Learning(beganAt: Date())
+        let now = Date()
+        perform(session.setKey(name, now: now), at: now)
         radio.restartScanning()
-        phase = .noKey
-        lastLockAt = nil
-        log("key device -> '\(name)' (channels reset, re-arming)")
-        refreshMenu(now: Date(), force: true)
+        refreshMenu(now: now, force: true)
     }
 
     // MARK: icon

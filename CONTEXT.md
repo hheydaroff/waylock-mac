@@ -30,7 +30,9 @@ threshold in dBm, and no "5 metres": RSSI could not be relied on at desk
 distance, so absence is the signal.
 
 **Phase** — `noKey` (never seen, or disabled), `armed` (present), `away`
-(silent, counting), `lockedOut` (locked, waiting for the key to come back).
+(silent, counting), `lockedOut` (locked, waiting for the key to come back). Owned by the
+session: only `Session` changes it, and `lockedOut` is entered only after a lock
+was verified.
 
 **Judgment** — the pair of (phase, action) that the lock decision returns. It is
 a value, so every gate can be tested without a radio or a screen.
@@ -49,3 +51,18 @@ the menu. Manual wins; "Automatic" clears it and re-learns.
 
 **Dry run** — `WAYLOCK_DRYRUN=1`. Prints what it would do. It is a real gate, not
 a debug print: it is checked in the same decision as everything else.
+
+**Session** — everything that decides, as one value advanced by a clock the caller
+owns: `tick(now:readings:)` every half second, `sight(_:now:)` per advertisement,
+and one method per menu choice. It holds the settings, the tracker, the phase and
+the time of the last lock, imports nothing but Foundation, and never calls
+`Date()`. A test walks it through virtual time; the app only feeds it.
+
+**Readings** — what only the machine can say at this moment: how long the user has
+been idle, and whether the screen is locked. The app reads them and hands them in.
+
+**Effect** — something the session decided and only the app can do: lock, log,
+save the settings, report a key event, note a re-arm. The session returns them in
+order; the app performs them. A lock is the one effect with a reply
+(`Session.lockFinished`), because the phase moves to `lockedOut` only on a
+verified lock.
