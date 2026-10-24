@@ -156,9 +156,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func heartbeat(absent: Double?, idle: Double?, locked: Bool) {
         guard Date().timeIntervalSince(lastBeat) >= 10 else { return }
         lastBeat = Date()
-        log("hb absent=\(absent.map { String(format: "%.1f", $0) } ?? "nil")s"
+        log("hb absent=\(absent.map { String(format: "%.1fs", $0) } ?? "never")"
             + " phase=\(phase.label) ch=\(tracker.channels.count)"
-            + " idle=\(idle.map { String(format: "%.0f", $0) } ?? "nil")s"
+            + " idle=\(idle.map { String(format: "%.0fs", $0) } ?? "unreadable")"
             + " locked=\(locked ? 1 : 0)"
             + " enabled=\(settings.enabled ? 1 : 0)"
             + " window=\(Int(settings.awayWindow.seconds))"
