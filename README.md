@@ -89,11 +89,8 @@ automated, which is the point.
 
 ```sh
 # measure a device and see the distribution (no --apply = read only)
-./build/Waylock.app/Contents/MacOS/Waylock --calibrate 10
-./build/Waylock.app/Contents/MacOS/Waylock --calibrate 10 --apply
-
-# verify the derivation itself, no radio or permission needed
-./build/Waylock.app/Contents/MacOS/Waylock --policy-test
+./build/waylock-tools --calibrate 10
+./build/waylock-tools --calibrate 10 --apply
 ```
 
 ## Choosing your own key device
@@ -122,15 +119,9 @@ accepts a name match only when
 - the address is one it has learned, or
 - no other same-named device is in range — the signature of a genuine rotation.
 
-An impostor always shows up alongside yours, so it never gets learned. Verified
-deterministically, no radio and no impostor hardware needed:
-
-```
-./build/Waylock.app/Contents/MacOS/Waylock --identity-test
-```
-
-Nine checks, run in a sandboxed defaults suite so they cannot touch your real
-settings (`exit()` skips `defer`, which was already caught once the hard way).
+An impostor always shows up alongside yours, so it never gets learned. This is
+verified deterministically in `./build/waylock-tests` — no radio, and no
+impostor hardware needed.
 
 ## What the measurements say
 
@@ -197,10 +188,27 @@ periodically (two distinct addresses for the same buds were observed). Both are
 handled — the lower rate is absorbed by the window, and the address change by
 matching on name instead of UUID.
 
+## How the code is organised
+
+Four directories, one rule: **Core never imports AppKit or CoreBluetooth.**
+
+| | |
+|---|---|
+| `Core/` | the decisions: settings, window derivation, identity, tracking, the lock decision, menu copy |
+| `App/` | the adapters: CoreBluetooth, the lock API, UserDefaults, AppKit menu, wiring |
+| `Tools/` | the two commands that need a real radio (`--selftest`, `--calibrate`) |
+| `Tests/` | assertions against Core only — no radio, no permission prompt, no locking |
+
+Because the decision logic is a set of values rather than a menu bar app, a
+walk-away, a colleague's identical strap and a false lock at the desk all replay
+in milliseconds under `build/waylock-tests`. The parts that cannot be tested that
+way are the parts that talk to macOS, and those are kept as thin as possible.
+
 ## Build
 
 ```sh
-./build.sh                # -> build/Waylock.app
+./build.sh                  # builds and signs all three
+./build/waylock-tests       # -> CORE OK — 97 checks
 open build/Waylock.app
 ```
 
@@ -253,10 +261,10 @@ permission"** rather than claiming all is well. Unlock, approve, done.
 
 Two consequences worth knowing:
 
-- **The CLI modes are unaffected.** `--selftest`, `--calibrate`, `--identity-test`
-  and `--policy-test` inherit the terminal's Bluetooth grant, so they keep
-  working while the app bundle is waiting for permission. That is why detection
-  can be tested immediately after a rebuild.
+- **The CLI runs are unaffected.** `build/waylock-tests` needs no Bluetooth at
+  all, and `build/waylock-tools` inherits the terminal's grant, so detection can
+  be tested immediately after a rebuild — the app bundle may be waiting for
+  permission while the same logic runs fine from a shell.
 - **You can stop the prompts** by signing with a stable identity instead of
   ad-hoc. One-time, and it needs a Keychain approval:
 
@@ -292,18 +300,20 @@ security import /tmp/wl.p12 -k ~/Library/Keychains/login.keychain-db -P "" -T /u
 ## Testing without locking yourself out
 
 ```sh
-# watch the detection logic, never touches the screen
-./build/Waylock.app/Contents/MacOS/Waylock --selftest 60
+# every decision, no radio, no permission prompt, no locking
+./build/waylock-tests
 
-# decision logic with no radio at all: identity, impostors, window policy
-./build/Waylock.app/Contents/MacOS/Waylock --identity-test
-./build/Waylock.app/Contents/MacOS/Waylock --policy-test
+# the detection path against the real radio, terminal output only
+./build/waylock-tools --selftest 60
 
-# run the menu bar app but log "WOULD LOCK" instead of locking
+# existing behaviour, end to end but never touching the screen
 open build/Waylock.app --env WAYLOCK_DRYRUN=1
 ```
 
 `-a` takes an app *name*, not a path, so `open -a build/Waylock.app` fails.
+
+The test binary covers windows, identity, tracking, the lock decision and the
+menu copy. The tools cover what only the radio can answer.
 
 ## Known limits
 

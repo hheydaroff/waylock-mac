@@ -269,6 +269,58 @@ These cost real time; they are the reusable part.
 5. **Ten minutes of baseline beats three of them.** The 180 s run missed the
    10.2 s tail that the 600 s run found, and that tail is what decides the window.
 
+### `UserDefaults.standard` is bundle-relative, so a bare executable reads the wrong domain
+
+`.standard` means "the current bundle's domain". Inside `Waylock.app` that is
+`io.github.hheydaroff.waylock`. A binary at `build/waylock-tools` has **no** bundle
+identifier, so `.standard` is the *global* domain: every key looks absent and the
+code falls back to its hardcoded defaults. That is not a read-only mistake — the
+first `save()` writes the fallbacks into the global domain.
+
+It surfaced as a selftest reporting the key device as `buds3`, the source
+default, while `defaults read io.github.hheydaroff.waylock` said `Amazfit Helio Strap`.
+The old single binary never hit it because it lived inside the .app and resolved
+the bundle even when invoked directly.
+
+Fix: name the domain explicitly.
+
+```swift
+init(_ defaults: UserDefaults? = nil) {
+    self.defaults = defaults ?? UserDefaults(suiteName: "io.github.hheydaroff.waylock") ?? .standard
+}
+```
+
+A test can still inject a sandbox suite, which is how the identity checks stay
+off the real prefs.
+
+### CoreBluetooth's initialiser blocks the thread it is called on
+
+`CBCentralManager(delegate:queue: nil)` runs on the main queue. When macOS is
+waiting for a Bluetooth permission decision, that initialiser blocks — so the
+main run loop never starts, the stall watchdog never fires, and the process
+produces **no output at all**. An 8-second selftest hung for 38 minutes this way,
+and every diagnostic that would have explained it was downstream of the block.
+
+Two fixes, both needed:
+
+- Create the manager on its own serial queue and hop callbacks to main. A
+  permission decision can then take as long as it likes without freezing the app
+  that is supposed to explain what is happening.
+- Never let a tool run unbounded. The CLI tools exit non-zero after 20 s with no
+  radio state, and print the reason; the menu bar app cannot exit, so it logs and
+  retries instead.
+
+`setvbuf(stdout, nil, _IONBF, 0)` in the tools as well: buffered output means a
+hang leaves no trace, which is exactly when a trace is worth most.
+
+### Rounding up on a measurement amplifies its noise
+
+`(raw * 10).rounded(.up) / 10` turned a 15.3 s window into 15.4 s, because the
+gaps come from `Date` subtraction, where 10.2 s is stored as 10.2000001 and
+multiplied by 1.5 lands just above 15.3. The `1.5x` headroom is the safety
+margin; the last decimal place is presentation. Round to nearest instead — and
+the test that caught it was comparing a derived window to a hand-computed one.
+
 ## Permissions are keyed to the code signature
 
 The app is ad-hoc signed, and `build.sh` signs on every build, so the cdhash
