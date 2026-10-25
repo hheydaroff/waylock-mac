@@ -13,6 +13,10 @@ It keys on absence, not signal strength, because on earbuds signal strength does
 
 Those are ten real minutes of a key device sitting at the desk, and they are the entire argument for the default: the device is silent for 1.8 s at a time, occasionally 5 s, once 10.2 s. A 10 s window locks the Mac while you are still sitting there. **Slide the window across the trace yourself: [heyhido.com/waylock-mac](https://heyhido.com/waylock-mac/)** — no build, no dependencies, one file ([source](docs/window-simulator.html)).
 
+[![A real walk away from the desk: the signal falls to -88 dBm, then 20 seconds of silence, then the key returns](docs/assets/walk-away-poster.png)](docs/assets/walk-away.mp4)
+
+Fifteen seconds of an actual walk-away, played at 4× ([mp4](docs/assets/walk-away.mp4), 200 KB): the strap fades to −88 dBm, goes silent for 20 s, and the Mac locks — while the last thing the radio said was a perfectly civil signal strength. `scripts/walk-animation.py` draws it from a `waylock-watch` recording, and refuses to render if no silence in the log actually clears the window.
+
 ## What you see
 
 Click the menu bar item while the key device is nearby:
