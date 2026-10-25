@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waylock — the away window, against a real trace</title>
+<meta name="description" content="Slide the away window across a measured Bluetooth gap trace and watch the false-lock count move. The reason Waylock's default is 15 s, not 10.">
+<style>
+  :root {
+    --bg: #0b0d0f;
+    --panel: #12161a;
+    --line: #232a31;
+    --text: #e8e6e1;
+    --muted: #808892;
+    --amber: #f0b429;
+    --red: #e0564a;
+    --green: #58b87a;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 15px/1.6 var(--mono);
+    -webkit-font-smoothing: antialiased;
+    padding: 48px 24px 96px;
+  }
+  main { max-width: 940px; margin: 0 auto; }
+
+  header { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 40px; }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 14px; letter-spacing: -0.01em; }
+  h1 span { color: var(--muted); font-weight: 400; }
+  .claim { color: var(--muted); max-width: 62ch; margin: 0; }
+  .claim b { color: var(--text); font-weight: 600; }
+
+  .dataset-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+  .tab {
+    font: inherit; font-size: 13px; color: var(--muted); background: transparent;
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 13px; cursor: pointer;
+  }
+  .tab[aria-selected="true"] { color: var(--bg); background: var(--text); border-color: var(--text); }
+  .tab:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 24px; margin-bottom: 20px;
+  }
+
+  /* the control */
+  .control-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .control-head label { font-size: 13px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+  .window-value { font-size: 40px; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .window-value small { font-size: 15px; color: var(--muted); margin-left: 4px; }
+  .window-value.risky { color: var(--amber); }
+  .window-value.safe { color: var(--green); }
+
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 34px;
+    background: transparent; margin: 18px 0 4px; cursor: grab;
+  }
+  input[type=range]:active { cursor: grabbing; }
+  input[type=range]::-webkit-slider-runnable-track {
+    height: 3px; border-radius: 3px;
+    background: linear-gradient(to right, var(--red) 0%, var(--red) 37.5%, var(--line) 37.5%, var(--line) 100%);
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6.5px;
+    border-radius: 50%; background: var(--text); border: none;
+  }
+  input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px rgba(240,180,41,.35); }
+
+  .ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+  .presets { display: flex; gap: 6px; margin-top: 16px; flex-wrap: wrap; }
+  .preset {
+    font: inherit; font-size: 12px; color: var(--muted); background: transparent;
+    border: 1px solid var(--line); border-radius: 4px; padding: 3px 9px; cursor: pointer;
+  }
+  .preset:hover { color: var(--text); border-color: var(--muted); }
+  .preset.is-current { color: var(--bg); background: var(--amber); border-color: var(--amber); }
+
+  /* the readouts */
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-top: 24px; }
+  .fact { background: var(--panel); padding: 14px 16px; }
+  .fact dt { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+  .fact dd { margin: 0; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .fact dd small { font-size: 12px; color: var(--muted); }
+  .fact dd.bad { color: var(--red); }
+  .fact dd.good { color: var(--green); }
+
+  /* the picture */
+  .chart-wrap { position: relative; margin-top: 8px; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .axis text { font: 11px var(--mono); fill: var(--muted); }
+  .grid line { stroke: var(--line); stroke-width: 1; }
+  .gap-dot { fill: var(--muted); }
+  .gap-dot.trigger { fill: var(--red); }
+  .window-line { stroke: var(--amber); stroke-width: 1.5; stroke-dasharray: 4 3; }
+  .window-label { font: 12px var(--mono); fill: var(--amber); }
+  .fire-band { fill: rgba(240, 180, 41, .07); }
+  .fire-label { font: 11px var(--mono); fill: rgba(240, 180, 41, .8); }
+  .caption { font-size: 12px; color: var(--muted); margin: 14px 0 0; }
+
+  /* the check */
+  .check { font-size: 12px; color: var(--muted); border-left: 2px solid var(--line); padding-left: 14px; margin-top: 22px; }
+  .check code { color: var(--text); }
+  .check .ok { color: var(--green); }
+  .check .mismatch { color: var(--red); }
+
+  footer { color: var(--muted); font-size: 12px; margin-top: 44px; border-top: 1px solid var(--line); padding-top: 20px; }
+  a { color: var(--text); text-decoration-color: var(--muted); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: var(--amber); }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>How long is the device really silent? <span>— the away window, against a measured trace.</span></h1>
+    <p class="claim">
+      Waylock locks when <b>every</b> advertising channel of the key device has been quiet for the
+      away window. Silence is not absence: a device sitting on your desk goes quiet for seconds at a
+      time. Slide the window across every gap that was actually measured and watch what it costs.
+    </p>
+  </header>
+
+  <div class="dataset-tabs" role="tablist" aria-label="Recorded devices"></div>
+
+  <section class="panel" aria-labelledby="ctl">
+    <div class="control-head">
+      <label id="ctl" for="window">away window</label>
+      <div class="window-value" id="windowValue" aria-live="polite">15<small>s</small></div>
+    </div>
+    <input type="range" id="window" min="6" max="30" step="1" value="15"
+           aria-describedby="windowNote">
+    <div class="ticks"><span>6 s</span><span>10</span><span>15</span><span>20</span><span>25</span><span>30 s</span></div>
+    <div class="presets" id="presets"></div>
+
+    <dl class="facts">
+      <div class="fact">
+        <dt>false locks, per 8 h at the desk</dt>
+        <dd id="perDay">—</dd>
+      </div>
+      <div class="fact">
+        <dt>chance of at least one, in a day</dt>
+        <dd id="chance">—</dd>
+      </div>
+      <div class="fact">
+        <dt>lock latency after you leave</dt>
+        <dd id="latency">—</dd>
+      </div>
+      <div class="fact">
+        <dt>gaps in this trace that would fire</dt>
+        <dd id="fires">—</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="panel" aria-labelledby="chartTitle">
+    <div class="control-head" style="margin-bottom:6px">
+      <label id="chartTitle">every measured gap, log scale</label>
+      <div style="font-size:12px;color:var(--muted)" id="traceNote"></div>
+    </div>
+    <div class="chart-wrap">
+      <svg id="chart" viewBox="0 0 880 240" role="img" aria-labelledby="chartTitle"></svg>
+    </div>
+    <p class="caption" id="windowNote">
+      Each mark is one real gap between two packets from the key device. Marks right of the dashed
+      line would have locked the Mac while the device was still at the desk. One recording, so read the
+      per-day figure as an order of magnitude, not a forecast.
+    </p>
+    <p class="check" id="check"></p>
+  </section>
+
+  <footer>
+    Data from <code>waylock-tools --export-gaps</code>; the rule the app applies is in
+    <a href="../FINDINGS.md">FINDINGS.md</a>. Nothing on this page is generated: the trace is one
+    recording, the arithmetic is in this file.
+  </footer>
+</main>
+
+<script>
+const DATA = {"defaultWindow": 15, "datasets": [{"device": "Amazfit Helio Strap", "seconds": 600, "samples": 280, "appWindow": 15.0, "recommended": 15.3, "cutoff": 17.9, "gaps": [1.788, 5.082, 5.107, 1.514, 1.784, 1.537, 5.099, 1.781, 1.787, 1.528, 1.771, 3.329, 1.775, 1.523, 3.304, 1.8, 5.108, 1.795, 1.777, 3.306, 3.304, 1.785, 1.273, 0.25, 1.274, 1.784, 1.789, 1.523, 1.785, 1.791, 3.32, 1.785, 1.524, 1.767, 2.027, 1.783, 1.788, 1.514, 1.776, 1.523, 1.786, 3.299, 1.789, 1.526, 1.785, 1.793, 3.326, 2.05, 5.099, 3.303, 1.796, 3.31, 2.042, 1.521, 1.784, 3.3, 1.792, 8.404, 3.585, 1.794, 5.097, 1.516, 5.37, 1.531, 1.769, 4.096, 1.525, 1.787, 5.1, 1.774, 1.529, 1.771, 1.527, 1.787, 1.781, 1.529, 1.51, 1.508, 1.794, 1.785, 1.524, 1.778, 1.534, 1.783, 1.785, 1.803, 1.789, 1.539, 1.782, 5.119, 1.777, 3.322, 1.777, 3.311, 1.79, 3.303, 1.517, 3.578, 1.795, 3.32, 1.776, 1.519, 3.301, 1.784, 0.25, 1.022, 10.199, 1.788, 5.115, 1.787, 0.768, 1.777, 1.534, 1.79, 1.786, 1.797, 1.786, 3.326, 1.777, 3.332, 1.78, 1.78, 1.523, 1.791, 1.781, 1.529, 1.787, 1.791, 5.113, 1.788, 1.792, 3.311, 1.792, 1.797, 1.533, 1.782, 1.798, 1.793, 1.526, 1.786, 1.787, 2.048, 0.765, 0.257, 0.767, 0.763, 0.257, 0.25, 0.752, 0.253, 0.761, 0.509, 1.014, 1.523, 1.786, 1.788, 1.795, 1.523, 1.777, 1.531, 1.776, 2.04, 1.796, 1.783, 3.329, 1.771, 1.522, 1.78, 1.533, 3.596, 4.337, 1.78, 3.293, 1.525, 1.776, 1.531, 1.777, 1.524, 1.789, 1.785, 1.786, 1.522, 1.784, 3.319, 1.785, 1.522, 1.787, 3.298, 3.317, 0.259, 1.527, 1.031, 4.818, 1.804, 1.799, 1.807, 3.591, 1.788, 1.52, 1.791, 6.125, 1.538, 3.575, 3.302, 1.79, 1.521, 1.791, 1.779, 1.787, 1.524, 1.796, 1.799, 1.79, 1.779, 3.322, 1.798, 1.782, 1.531, 1.797, 3.051, 1.793, 1.782, 1.532, 1.782, 1.789, 3.314, 1.782, 1.52, 1.266, 1.517, 1.527, 3.578, 1.791, 1.525, 1.78, 3.32, 1.778, 1.794, 1.508, 5.091, 1.791, 1.543, 1.782, 3.312, 1.788, 3.306, 1.8, 1.78, 1.787, 1.798, 1.814, 3.303, 3.311, 1.785, 1.786, 1.535, 2.319, 4.589, 1.782, 3.581, 1.513, 1.788, 1.534, 0.266, 3.297, 1.523, 1.801, 1.778, 1.522, 1.785, 1.776, 1.52, 1.791, 1.529, 1.795, 1.799, 1.78, 3.313, 1.776, 1.792]}]};
+
+// The rule Core/Arrivals.swift applies, restated so a reader can check the app
+// against this page instead of trusting it. Gaps beyond 10x the median are
+// treated as absences and dropped; the cutoff has a floor of 1.25x the minimum
+// window (12 s), so 15 s. The window is worst kept gap x1.5, clamped 12...60.
+const MIN_WINDOW = 12, MAX_WINDOW = 60, SCALE = 1.5, CUTOFF_FLOOR = 15;
+const RISKY_BELOW = 15;          // measured: 10 s false-locked at the desk, 15 s did not
+const DAY_HOURS = 8;
+
+let current = 0;
+let windowEl, valueEl;
+
+const fmt = (n, d = 1) => n.toFixed(d);
+
+function percentile(sorted, p) {
+  if (!sorted.length) return 0;
+  const i = (sorted.length - 1) * p, lo = Math.floor(i), hi = Math.ceil(i);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+}
+
+function summarise(ds) {
+  const gaps = [...ds.gaps].sort((a, b) => a - b);
+  const median = percentile(gaps, 0.5);
+  const cutoff = Math.max(10 * median, CUTOFF_FLOOR);
+  const kept = gaps.filter(g => g <= cutoff);
+  const worst = kept.length ? kept[kept.length - 1] : 0;
+  const learned = Math.min(MAX_WINDOW, Math.max(MIN_WINDOW, Math.ceil(worst * SCALE * 10) / 10));
+  return { gaps, median, cutoff, kept, worst, learned, hours: ds.seconds / 3600 };
+}
+
+function stats(s, w) {
+  const fired = s.gaps.filter(g => g >= w).length;
+  const perDay = s.hours > 0 ? (fired / s.hours) * DAY_HOURS : 0;
+  const chance = perDay > 0 ? 1 - Math.exp(-perDay) : 0;
+  return { fired, perDay, chance };
+}
+
+// x maps 0.05 s ... 60 s onto the plot width, logarithmically: the interesting
+// range spans three orders of magnitude and a linear axis would bury the tail.
+const X0 = 46, X1 = 856, W = X1 - X0;
+const LO = Math.log(0.05), HI = Math.log(60);
+const xOf = v => X0 + ((Math.log(Math.max(v, 0.05)) - LO) / (HI - LO)) * W;
+
+function drawChart(ds, s, w) {
+  const svg = document.getElementById('chart');
+  const rows = 4, top = 26, rowH = 34;
+  let out = '';
+
+  // The zone the window would call an absence: past the line, not before it.
+  out += `<rect class="fire-band" x="${xOf(w)}" y="${top - 14}" width="${X1 - xOf(w)}" height="${rows * rowH + 10}"/>`;
+  out += `<text class="fire-label" x="${xOf(w) + 8}" y="${top - 18}">past this line: the Mac locks</text>`;
+
+  // decade grid
+  const marks = [0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60];
+  out += '<g class="grid">' + marks.map(m =>
+    `<line x1="${xOf(m)}" y1="${top - 10}" x2="${xOf(m)}" y2="${top + rows * rowH}"/>`
+  ).join('') + '</g>';
+  out += '<g class="axis">' + marks.map(m =>
+    `<text x="${xOf(m)}" y="${top + rows * rowH + 22}" text-anchor="middle">${m < 1 ? m : m + 's'}</text>`
+  ).join('') + '</g>';
+
+  // one dot per gap, stacked downwards in arrival order
+  out += s.gaps.map((g, i) => {
+    const col = i % rows, y = top + col * rowH + 6 + ((i * 37) % 9);
+    return `<circle class="gap-dot${g >= w ? ' trigger' : ''}" cx="${xOf(g).toFixed(1)}" cy="${y}" r="2.1"/>`;
+  }).join('');
+
+  // the window
+  out += `<line class="window-line" x1="${xOf(w)}" y1="${top - 14}" x2="${xOf(w)}" y2="${top + rows * rowH + 6}"/>`;
+  out += `<text class="window-label" x="${xOf(w) + 8}" y="${top + 4}">${w} s window</text>`;
+
+  svg.innerHTML = out;
+}
+
+function render() {
+  const ds = DATA.datasets[current];
+  const s = summarise(ds);
+  const w = Number(windowEl.value);
+  const st = stats(s, w);
+
+  valueEl.textContent = w;
+  valueEl.insertAdjacentHTML('beforeend', '<small>s</small>');
+  valueEl.className = 'window-value ' + (w < RISKY_BELOW ? 'risky' : 'safe');
+
+  const perDay = document.getElementById('perDay');
+  perDay.innerHTML = `${fmt(st.perDay)} <small>locks</small>`;
+  perDay.className = st.perDay >= 1 ? 'bad' : st.perDay > 0.1 ? '' : 'good';
+
+  const chance = document.getElementById('chance');
+  chance.innerHTML = `${Math.round(st.chance * 100)}<small>%</small>`;
+  chance.className = st.chance > 0.5 ? 'bad' : st.chance > 0.05 ? '' : 'good';
+
+  document.getElementById('latency').innerHTML = `${w}–${w + 1} <small>s</small>`;
+  document.getElementById('fires').innerHTML =
+    `${st.fired} <small>of ${s.gaps.length}</small>`;
+  document.getElementById('fires').className = st.fired > 0 ? 'bad' : 'good';
+
+  document.getElementById('traceNote').textContent =
+    `${ds.device} · ${s.gaps.length} gaps · ${Math.round(ds.seconds / 60)} min · median ${fmt(s.median, 2)} s · worst ${fmt(s.gaps[s.gaps.length - 1], 1)} s`;
+
+  document.querySelectorAll('.preset').forEach(b =>
+    b.classList.toggle('is-current', Number(b.dataset.w) === w));
+
+  drawChart(ds, s, w);
+
+  // The page recomputes the app's rule; say so, and say when they disagree —
+  // a page that silently drifts from the binary is worse than no page.
+  const check = document.getElementById('check');
+  const appWindow = ds.recommended;
+  if (appWindow == null) {
+    check.innerHTML = `this trace was too short for the app to settle a window.`;
+  } else if (Math.abs(s.learned - appWindow) < 0.15) {
+    check.innerHTML = `the app learns <code>${fmt(s.learned)} s</code> from this trace `
+      + `<span class="ok">✓ matches what the binary computed (${fmt(appWindow)} s)</span>`;
+  } else {
+    check.innerHTML = `this page derives <code>${fmt(s.learned)} s</code> but the binary computed `
+      + `<code>${fmt(appWindow)} s</code> <span class="mismatch">— the page has drifted from Core/Arrivals.swift</span>`;
+  }
+  check.insertAdjacentHTML('beforeend',
+    `<br>worst gap it would size for: <code>${fmt(s.worst, 1)} s</code> `
+    + `(gaps above ${fmt(s.cutoff, 0)} s are treated as real absences and dropped)`);
+}
+
+function init() {
+  windowEl = document.getElementById('window');
+  valueEl = document.getElementById('windowValue');
+
+  const tabs = document.querySelector('.dataset-tabs');
+  if (DATA.datasets.length > 1) {
+    DATA.datasets.forEach((d, i) => {
+      const b = document.createElement('button');
+      b.className = 'tab'; b.type = 'button'; b.role = 'tab';
+      b.textContent = d.device;
+      b.setAttribute('aria-selected', String(i === 0));
+      b.onclick = () => {
+        current = i;
+        document.querySelectorAll('.tab').forEach((t, j) => t.setAttribute('aria-selected', String(j === i)));
+        render();
+      };
+      tabs.append(b);
+    });
+  } else {
+    tabs.remove();
+  }
+
+  const presets = document.getElementById('presets');
+  [8, 10, 12, 15, 20, 30].forEach(w => {
+    const b = document.createElement('button');
+    b.className = 'preset'; b.type = 'button'; b.dataset.w = w;
+    b.textContent = `${w} s` + (w === DATA.defaultWindow ? ' · default' : '');
+    b.onclick = () => { windowEl.value = w; render(); };
+    presets.append(b);
+  });
+
+  windowEl.value = DATA.defaultWindow ?? 15;
+  windowEl.addEventListener('input', render);
+  render();
+}
+
+init();
+</script>
+</body>
+</html>

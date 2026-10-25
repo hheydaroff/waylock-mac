@@ -15,6 +15,7 @@ import Foundation
 //
 //   waylock-tools --selftest [seconds]
 //   waylock-tools --calibrate [minutes] [--apply]
+//   waylock-tools --export-gaps [minutes] [--out path]
 
 /// A live session: radio in, tracker out. Shared by both commands so the wire-up
 /// exists once.
@@ -172,6 +173,82 @@ final class Live {
     RunLoop.main.run()
 }
 
+/// Records the union-gap distribution and writes it out as JSON, so the window
+/// choice can be argued with interactively instead of from a table.
+///
+/// This exists because the interesting question — "what does a 10 s window cost
+/// me?" — cannot be answered from percentiles. It needs every gap that was
+/// actually measured, so a reader can slide the window across them and watch the
+/// false-lock count move. The output holds timings and nothing else: no
+/// identifiers, so it is safe to publish alongside the histogram it feeds.
+@MainActor func runExportGaps(minutes: Double, out path: String) {
+    let live = Live()
+    let start = Date()
+    let total = max(30, minutes * 60)
+
+    print("recording gaps for '\(live.settings.keyName)' for \(Int(total / 60)) min -> \(path)")
+    print("stay at the desk with the device; absences are discarded as outliers, not learned")
+    live.start()
+
+    let step: @MainActor (Double) -> Int32? = { elapsed in
+        checkRadio(live, elapsed: elapsed)
+        print(String(format: "%5.0fs  ch=%d  gaps=%3d",
+                     elapsed, live.tracker.channels.count, live.tracker.arrivals.count))
+
+        guard elapsed >= total else { return nil }
+
+        let arrivals = live.tracker.arrivals
+        let gaps = arrivals.gaps
+        guard gaps.count >= Arrivals.minSamples else {
+            print("\nNOT ENOUGH DATA (need \(Arrivals.minSamples) gaps, got \(gaps.count))"
+                  + " — is the device advertising?")
+            return 2
+        }
+
+        // Percentiles are recomputed by the page, so this carries raw gaps only;
+        // the recommendation is included to let a reader check the page against
+        // the app instead of trusting the page.
+        let recommendation = arrivals.recommendation()
+        func quote(_ s: String) -> String {
+            "\"" + s.replacingOccurrences(of: "\\", with: "\\\\")
+                   .replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        }
+        let payload = """
+        {
+          "device": \(quote(live.settings.keyName)),
+          "seconds": \(String(format: "%.0f", elapsed)),
+          "samples": \(gaps.count),
+          "appWindow": \(String(format: "%.1f", live.settings.awayWindow.seconds)),
+          "recommended": \(recommendation.map { String(format: "%.1f", $0.window) } ?? "null"),
+          "worstKept": \(recommendation.map { String(format: "%.1f", $0.worst) } ?? "null"),
+          "gaps": [\(gaps.map { String(format: "%.3f", $0) }.joined(separator: ","))]
+        }
+
+        """
+        do {
+            try payload.write(toFile: path, atomically: true, encoding: .utf8)
+        } catch {
+            print("\ncould not write \(path): \(error.localizedDescription)")
+            return 2
+        }
+        print("\nwrote \(gaps.count) gaps over \(Int(elapsed))s to \(path)")
+        if let r = recommendation {
+            print(String(format: "app would learn %.1fs (worst kept gap %.1fs, %d of %d samples)",
+                         r.window, r.worst, r.kept, gaps.count))
+        }
+        return 0
+    }
+    let timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { timer in
+        let elapsed = Date().timeIntervalSince(start)
+        let code = MainActor.assumeIsolated { step(elapsed) }
+        guard let code else { return }
+        timer.invalidate()
+        exit(code)
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    RunLoop.main.run()
+}
+
 setvbuf(stdout, nil, _IONBF, 0)   // unbuffered: a hang must still leave a trace
 
 /// The radio never reaching a known state is the failure that has no error
@@ -193,7 +270,13 @@ setvbuf(stdout, nil, _IONBF, 0)   // unbuffered: a hang must still leave a trace
 
 let arguments = CommandLine.arguments
 
-if let index = arguments.firstIndex(of: "--calibrate") {
+if let index = arguments.firstIndex(of: "--export-gaps") {
+    let minutes = index + 1 < arguments.count ? Double(arguments[index + 1]) ?? 10 : 10
+    let out = arguments.firstIndex(of: "--out").flatMap { i in
+        i + 1 < arguments.count ? arguments[i + 1] : nil
+    } ?? "gaps.json"
+    runExportGaps(minutes: minutes, out: out)
+} else if let index = arguments.firstIndex(of: "--calibrate") {
     let minutes = index + 1 < arguments.count ? Double(arguments[index + 1]) ?? 10 : 10
     runCalibration(minutes: minutes, apply: arguments.contains("--apply"))
 } else if arguments.contains("--selftest") {
@@ -204,6 +287,7 @@ if let index = arguments.firstIndex(of: "--calibrate") {
     print("""
     usage: waylock-tools --selftest [seconds]
            waylock-tools --calibrate [minutes] [--apply]
+           waylock-tools --export-gaps [minutes] [--out path]   (feeds docs/window-simulator.html)
 
     The menu bar app is build/Waylock.app. Logic tests are `swift test`.
     """)

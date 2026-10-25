@@ -9,6 +9,10 @@ Waylock pairs with one Bluetooth device you already carry and locks your Mac whe
 
 It keys on absence, not signal strength, because on earbuds signal strength does not work. Tested with a Galaxy Buds3 Pro and an Amazfit Helio Strap on macOS 27.0.1 (M4 Max).
 
+![Union gaps between packets over ten minutes at the desk: a dense cluster around 1.8 s, one gap at 10.2 s, and the 15 s window line with nothing past it](docs/assets/trace.png)
+
+Those are ten real minutes of a key device sitting at the desk, and they are the entire argument for the default: the device is silent for 1.8 s at a time, occasionally 5 s, once 10.2 s. A 10 s window locks the Mac while you are still sitting there. **Slide the window across the trace yourself → [`docs/window-simulator.html`](docs/window-simulator.html)** (no build, no dependencies; open it, or read it on GitHub Pages).
+
 ## What you see
 
 Click the menu bar item while the key device is nearby:
@@ -95,9 +99,12 @@ Gaps beyond 10x the median are discarded as absences rather than learned as beha
 ```sh
 swift run waylock-tools --calibrate 10           # measure and show the distribution, read only
 swift run waylock-tools --calibrate 10 --apply   # keep the result
+swift run waylock-tools --export-gaps 10 --out /tmp/gaps.json   # the raw gaps, for the page below
 swift run waylock-scan 150                       # list every advertiser for 150 s
 swift run waylock-watch "Amazfit" 60             # watch one named device for 60 s
 ```
+
+The picture at the top of this README is not an illustration, it is one of those runs: `--export-gaps` writes the raw gap list, `scripts/embed_trace.py` inlines it into [`docs/window-simulator.html`](docs/window-simulator.html) and the two chart sources, and `scripts/render-social-preview.sh` renders the committed PNGs with headless Chrome. The committed trace is `docs/data/trace-amazfit-helio-strap.json` (timings only, no device identifiers), so you can re-render every number in it without owning the hardware.
 
 </details>
 
@@ -214,9 +221,10 @@ No Xcode project: `./build.sh` runs `swiftc` and assembles the bundle by hand. O
 |---|---|
 | `Core/` | the decisions: settings, window derivation, identity, tracking, the lock decision, menu copy |
 | Adapters (`App/`) | CoreBluetooth, the lock API, UserDefaults, logging; the only code that talks to macOS |
-| `Tools/` | the commands that need a real radio: `--selftest`, `--calibrate`, `waylock-scan`, `waylock-watch` |
+| `Tools/` | the commands that need a real radio: `--selftest`, `--calibrate`, `--export-gaps`, `waylock-scan`, `waylock-watch` |
 | `Tests/` | assertions against Core only: no radio, no permission prompt, no locking |
 | App bundle | `build/Waylock.app`: Core, the adapters and the AppKit menu wiring, ad-hoc signed |
+| `docs/` + `scripts/` | the window simulator, its chart sources, and the two scripts that keep them in step with a real trace |
 
 Because the decisions are values rather than a menu bar app, a walk-away, a colleague's identical strap and a false lock at the desk all replay in milliseconds under `swift test`. `swift build` compiles the same targets without running anything.
 

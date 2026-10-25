@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<!--
+  Source for docs/assets/social-preview.png (1280x630) — the card GitHub shows when
+  this repo is shared. Upload it in Settings -> Social preview.
+
+  HTML rather than a drawing tool because the histogram is the *real* trace from
+  docs/window-simulator.html, not an artist's impression of one.
+  Regenerate with scripts/render-social-preview.sh.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 630px; }
+  body {
+    background: #0b0d0f;
+    color: #e8e6e1;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+    padding: 56px 64px 48px;
+    display: flex; flex-direction: column;
+    position: relative; overflow: hidden;
+  }
+  /* a faint grid: the card should not read as empty black */
+  body::before {
+    content: ""; position: absolute; inset: 0;
+    background-image: linear-gradient(#141a1f 1px, transparent 1px),
+                      linear-gradient(90deg, #141a1f 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .inner { position: relative; display: flex; flex-direction: column; height: 100%; }
+
+  .mark { display: flex; align-items: center; gap: 12px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: #f0b429; }
+  .name { font: 600 24px ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: -0.01em; }
+  .where { font: 15px ui-monospace, Menlo, monospace; color: #6b737c; margin-left: 2px; }
+
+  h1 {
+    font-size: 60px; line-height: 1.08; letter-spacing: -0.03em; font-weight: 700;
+    margin-top: 46px;
+  }
+  h1 em { font-style: normal; color: #f0b429; }
+  .sub {
+    font-size: 21px; line-height: 1.45; color: #99a2ab; margin-top: 20px; max-width: 54ch;
+  }
+
+  .chart { margin-top: auto; }
+  .chart-label {
+    font: 12px ui-monospace, Menlo, monospace; color: #6b737c;
+    display: flex; justify-content: space-between; margin-bottom: 12px;
+  }
+  .chips {
+    display: flex; gap: 9px; margin-top: 22px;
+    font: 13px ui-monospace, Menlo, monospace; color: #7d858e;
+  }
+  .chip { border: 1px solid #232a31; border-radius: 999px; padding: 5px 13px; }
+</style>
+</head>
+<body>
+<div class="inner">
+  <div class="mark">
+    <div class="dot"></div>
+    <div class="name">Waylock</div>
+    <div class="where">macOS · menu bar</div>
+  </div>
+
+  <h1>Locks the Mac when<br>the key device <em>goes quiet</em>.</h1>
+  <p class="sub">
+    Not when signal strength claims it is far — that number does not survive a body.
+    Every threshold here was measured, per device.
+  </p>
+
+  <div class="chart">
+    <div class="chart-label">
+      <span>union gaps between packets · 10 min at the desk · log scale</span>
+      <span id="note"></span>
+    </div>
+    <svg id="chart" width="1152" height="150" viewBox="0 0 1152 150"></svg>
+    <div class="chips">
+      <div class="chip">Swift 6</div>
+      <div class="chip">MIT</div>
+      <div class="chip">macOS 13+</div>
+      <div class="chip">no dependencies</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// The same trace as the simulator, drawn at card scale: 280 dots is the point.
+const GAPS = [1.788, 5.082, 5.107, 1.514, 1.784, 1.537, 5.099, 1.781, 1.787, 1.528, 1.771, 3.329, 1.775, 1.523, 3.304, 1.8, 5.108, 1.795, 1.777, 3.306, 3.304, 1.785, 1.273, 0.25, 1.274, 1.784, 1.789, 1.523, 1.785, 1.791, 3.32, 1.785, 1.524, 1.767, 2.027, 1.783, 1.788, 1.514, 1.776, 1.523, 1.786, 3.299, 1.789, 1.526, 1.785, 1.793, 3.326, 2.05, 5.099, 3.303, 1.796, 3.31, 2.042, 1.521, 1.784, 3.3, 1.792, 8.404, 3.585, 1.794, 5.097, 1.516, 5.37, 1.531, 1.769, 4.096, 1.525, 1.787, 5.1, 1.774, 1.529, 1.771, 1.527, 1.787, 1.781, 1.529, 1.51, 1.508, 1.794, 1.785, 1.524, 1.778, 1.534, 1.783, 1.785, 1.803, 1.789, 1.539, 1.782, 5.119, 1.777, 3.322, 1.777, 3.311, 1.79, 3.303, 1.517, 3.578, 1.795, 3.32, 1.776, 1.519, 3.301, 1.784, 0.25, 1.022, 10.199, 1.788, 5.115, 1.787, 0.768, 1.777, 1.534, 1.79, 1.786, 1.797, 1.786, 3.326, 1.777, 3.332, 1.78, 1.78, 1.523, 1.791, 1.781, 1.529, 1.787, 1.791, 5.113, 1.788, 1.792, 3.311, 1.792, 1.797, 1.533, 1.782, 1.798, 1.793, 1.526, 1.786, 1.787, 2.048, 0.765, 0.257, 0.767, 0.763, 0.257, 0.25, 0.752, 0.253, 0.761, 0.509, 1.014, 1.523, 1.786, 1.788, 1.795, 1.523, 1.777, 1.531, 1.776, 2.04, 1.796, 1.783, 3.329, 1.771, 1.522, 1.78, 1.533, 3.596, 4.337, 1.78, 3.293, 1.525, 1.776, 1.531, 1.777, 1.524, 1.789, 1.785, 1.786, 1.522, 1.784, 3.319, 1.785, 1.522, 1.787, 3.298, 3.317, 0.259, 1.527, 1.031, 4.818, 1.804, 1.799, 1.807, 3.591, 1.788, 1.52, 1.791, 6.125, 1.538, 3.575, 3.302, 1.79, 1.521, 1.791, 1.779, 1.787, 1.524, 1.796, 1.799, 1.79, 1.779, 3.322, 1.798, 1.782, 1.531, 1.797, 3.051, 1.793, 1.782, 1.532, 1.782, 1.789, 3.314, 1.782, 1.52, 1.266, 1.517, 1.527, 3.578, 1.791, 1.525, 1.78, 3.32, 1.778, 1.794, 1.508, 5.091, 1.791, 1.543, 1.782, 3.312, 1.788, 3.306, 1.8, 1.78, 1.787, 1.798, 1.814, 3.303, 3.311, 1.785, 1.786, 1.535, 2.319, 4.589, 1.782, 3.581, 1.513, 1.788, 1.534, 0.266, 3.297, 1.523, 1.801, 1.778, 1.522, 1.785, 1.776, 1.52, 1.791, 1.529, 1.795, 1.799, 1.78, 3.313, 1.776, 1.792];
+const CUTOFF = 17.9;   // the app's "this was a real absence" line
+const WINDOW = 15;           // the shipped default
+
+const X0 = 4, X1 = 1148, W = X1 - X0;
+const LO = Math.log(0.05), HI = Math.log(60);
+const xOf = v => X0 + ((Math.log(Math.max(v, 0.05)) - LO) / (HI - LO)) * W;
+
+const sorted = [...GAPS].sort((a, b) => a - b);
+document.getElementById('note').textContent =
+  `${sorted.length} gaps · median ${sorted[Math.floor(sorted.length / 2)].toFixed(1)} s`
+  + ` · worst ${sorted[sorted.length - 1].toFixed(1)} s`;
+
+const rows = 4, rowH = 26, yTop = 14;   // `top` would collide with window.top
+const H = yTop + rows * rowH;
+let out = '';
+
+// the away zone is the only thing worth shading
+out += `<rect x="${xOf(WINDOW)}" y="0" width="${X1 - xOf(WINDOW)}" height="${H}" fill="rgba(240,180,41,.055)"/>`;
+
+const marks = [1, 2, 5, 10, 20, 60];
+out += marks.map(m =>
+  `<line x1="${xOf(m)}" y1="0" x2="${xOf(m)}" y2="${H}" stroke="#1b2126"/>`).join('');
+out += marks.map(m =>
+  `<text x="${xOf(m)}" y="${H + 16}" font-size="11" font-family="ui-monospace, Menlo, monospace"`
+  + ` fill="#5c646d" text-anchor="${m === marks[marks.length - 1] ? "end" : "middle"}">${m}s</text>`).join('');
+
+GAPS.forEach((g, i) => {
+  const col = i % rows, y = yTop + col * rowH + ((i * 41) % 9);
+  const absent = g > CUTOFF;
+  out += `<circle cx="${xOf(g).toFixed(1)}" cy="${y}" r="2.3"`
+       + ` fill="${absent ? '#f0b429' : '#e8e6e1'}" opacity="${absent ? .9 : .5}"/>`;
+});
+
+out += `<line x1="${xOf(WINDOW)}" y1="0" x2="${xOf(WINDOW)}" y2="${H}" stroke="#f0b429"`
+     + ` stroke-width="1.3" stroke-dasharray="4 3"/>`;
+out += `<text x="${xOf(WINDOW) + 9}" y="13" font-size="12" font-family="ui-monospace, Menlo, monospace"`
+     + ` fill="#f0b429">${WINDOW} s window → away</text>`;
+document.getElementById('chart').innerHTML = out;
+</script>
+</body>
+</html>
