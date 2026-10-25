@@ -141,6 +141,31 @@ distribution of the union gap, not from intuition.
 15 s sits 47 % above the observed 10.2 s worst case, which is why it is the
 default. The menu still offers 8 s and 10 s, labelled `may false-lock`.
 
+### The distribution is bimodal, and that is the real argument
+
+A 297 s walk-away recording (`waylock-watch`, strapped to the key device) is the
+clearest evidence yet, because it captured both states in one file:
+
+| while at the desk | while away |
+|---|---|
+| 187 gaps, median 1.28 s, p90 3.30 s, **max 6.61 s** | two silences: **20.12 s** and **20.96 s** |
+
+Nothing landed in between. That matters more than any percentile: the window
+does not have to be tuned finely, it has to sit anywhere in a **13.5 s wide
+empty band** between the worst seated gap and the shortest real absence. 15 s is
+comfortably inside it, and so is 12 s. Only windows at or below the seated
+tail (8 s, 10 s) can false-lock, which is exactly what the table above shows.
+
+Two details from that recording are worth keeping:
+
+- **The strap reappeared for exactly one packet** between the two silences
+  (t=49.78 s), so the app re-armed for an instant and locked again 15 s later.
+  Brief single-packet reappearances are a real pattern at the edge of range,
+  not a bug, and they cost the user a second lock screen.
+- **The last RSSI before silence was −88 dBm, and −71 dBm at the first lock.**
+  Both are ordinary-looking numbers. No threshold on this device separates
+  "seated" from "gone" as cleanly as silence does — which is the whole design.
+
 A correction worth recording: an earlier "longest all-absent run at desk = 0 s"
 figure was **tautological** — it defined presence using the same window it was
 testing, so it could never show a false-lock risk. The union-gap distribution
