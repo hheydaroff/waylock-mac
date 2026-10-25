@@ -11,7 +11,7 @@ It keys on absence, not signal strength, because on earbuds signal strength does
 
 ![Union gaps between packets over ten minutes at the desk: a dense cluster around 1.8 s, one gap at 10.2 s, and the 15 s window line with nothing past it](docs/assets/trace.png)
 
-Those are ten real minutes of a key device sitting at the desk, and they are the entire argument for the default: the device is silent for 1.8 s at a time, occasionally 5 s, once 10.2 s. A 10 s window locks the Mac while you are still sitting there. **Slide the window across the trace yourself → [`docs/window-simulator.html`](docs/window-simulator.html)** (no build, no dependencies; open it, or read it on GitHub Pages).
+Those are ten real minutes of a key device sitting at the desk, and they are the entire argument for the default: the device is silent for 1.8 s at a time, occasionally 5 s, once 10.2 s. A 10 s window locks the Mac while you are still sitting there. **Slide the window across the trace yourself: [heyhido.com/waylock-mac](https://heyhido.com/waylock-mac/)** — no build, no dependencies, one file ([source](docs/window-simulator.html)).
 
 ## What you see
 
