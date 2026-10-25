@@ -7,6 +7,12 @@ part that transfers to the next device.
 
 README.md is how to *use* this. This file is why it is built the way it is.
 
+> **Redaction.** Peripheral address prefixes are stable stand-ins
+> (`1A2B3C41`…), the Mac's own controller address is omitted, and a device that
+> named itself after its owner is written `<owner>`. Rates, gaps, RSSI values,
+> timings and conclusions are unedited — only the identifiers that would point at
+> a specific person's hardware are replaced.
+
 ## Environment
 
 | | |
